@@ -2,6 +2,35 @@
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+const loreContentTypeOptions = ["Lore Event", "Champion Lore", "Lore Fun Fact"] as const;
+const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-style"] as const;
+const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
+const durations = ["1min15", "1min30", "1min40"] as const;
+const languages = ["English", "French", "Spanish"] as const;
+
+type LoreContentType = (typeof loreContentTypeOptions)[number];
+type LoreTone = (typeof tones)[number];
+type LorePlatform = (typeof platforms)[number];
+type LoreDuration = (typeof durations)[number];
+type LoreLanguage = (typeof languages)[number];
+
+type LorePack = {
+  title: string;
+  hook: string;
+  script: string;
+  voiceReadyScript: string;
+  captionVersion: string[];
+  visualBeats: {
+    beat: string;
+    visualSuggestion: string;
+  }[];
+  tiktokDescription: string;
+  instagramCaption: string;
+  youtubeShortsTitle: string;
+  hashtags: string[];
+  pinnedComment: string;
+};
+
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a"];
 const ACCEPTED_MIME_TYPES = [
@@ -70,6 +99,48 @@ function validateAudioFile(file: File) {
   return "";
 }
 
+function downloadTextFile(fileName: string, content: string, mimeType = "text/plain") {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function scriptAsText(pack: LorePack) {
+  return [
+    `Viral title: ${pack.title}`,
+    "",
+    `Short hook: ${pack.hook}`,
+    "",
+    "Full narration script:",
+    pack.script,
+    "",
+    "Voice-ready version:",
+    pack.voiceReadyScript,
+    "",
+    "Caption-friendly version:",
+    ...pack.captionVersion.map((line) => `- ${line}`),
+    "",
+    "Suggested visual beats:",
+    ...pack.visualBeats.map((item) => `- ${item.beat}: ${item.visualSuggestion}`),
+    "",
+    `TikTok description: ${pack.tiktokDescription}`,
+    "",
+    `Instagram caption: ${pack.instagramCaption}`,
+    "",
+    `YouTube Shorts title: ${pack.youtubeShortsTitle}`,
+    "",
+    `Hashtags: ${pack.hashtags.join(" ")}`,
+    "",
+    `Pinned comment question: ${pack.pinnedComment}`,
+  ].join("\n");
+}
+
 export default function HomePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -85,6 +156,15 @@ export default function HomePage() {
   const [notice, setNotice] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [loreContentType, setLoreContentType] = useState<LoreContentType>("Lore Event");
+  const [loreTopic, setLoreTopic] = useState("");
+  const [loreTone, setLoreTone] = useState<LoreTone>("Mysterious");
+  const [lorePlatform, setLorePlatform] = useState<LorePlatform>("TikTok");
+  const [loreDuration, setLoreDuration] = useState<LoreDuration>("1min30");
+  const [loreLanguage, setLoreLanguage] = useState<LoreLanguage>("English");
+  const [loreResult, setLoreResult] = useState<LorePack | null>(null);
+  const [loreError, setLoreError] = useState("");
+  const [isLoreGenerating, setIsLoreGenerating] = useState(false);
 
   const selectedMode = modes[mode];
 
@@ -142,6 +222,48 @@ export default function HomePage() {
     event.preventDefault();
     setIsDragging(false);
     selectFile(event.dataTransfer.files?.[0] ?? null);
+  }
+
+  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
+    event.preventDefault();
+    setLoreError("");
+
+    if (generationMode === "custom" && !loreTopic.trim()) {
+      setLoreError("Enter a League of Legends lore topic before generating.");
+      return;
+    }
+
+    setIsLoreGenerating(true);
+
+    try {
+      const response = await fetch("/api/generate-lol-lore", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          contentType: loreContentType,
+          topic: loreTopic,
+          tone: loreTone,
+          platform: lorePlatform,
+          duration: loreDuration,
+          language: loreLanguage,
+          mode: generationMode,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as (LorePack & { error?: string }) | null;
+
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? "Lore generation failed. Please try again.");
+      }
+
+      setLoreResult(payload);
+    } catch (submitError) {
+      setLoreError(submitError instanceof Error ? submitError.message : "Network error while generating lore.");
+    } finally {
+      setIsLoreGenerating(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
@@ -220,17 +342,176 @@ export default function HomePage() {
         <nav className="flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-lg font-black text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
-              AP
+              LC
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Creator audio SaaS</p>
-              <p className="font-semibold text-white">Audio Pace Cleaner</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Lore to audio workflow</p>
+              <p className="font-semibold text-white">LoL Lore + Audio Pace Cleaner</p>
             </div>
           </div>
           <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300 backdrop-blur">
-            No login. No database. Audio only.
+            Generate script. Voice it. Clean the pacing.
           </div>
         </nav>
+
+        <section className="rounded-[2.25rem] border border-violet-200/15 bg-violet-300/[0.035] p-5 shadow-2xl shadow-black/30 backdrop-blur-xl">
+          <div className="rounded-[1.75rem] border border-white/10 bg-slate-950/70 p-6 sm:p-8">
+            <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
+              <div className="space-y-6">
+                <div className="inline-flex rounded-full border border-violet-300/20 bg-violet-300/10 px-4 py-2 text-sm font-medium text-violet-100">
+                  Step 1 - League of Legends lore script pack
+                </div>
+                <div>
+                  <h1 className="max-w-4xl text-4xl font-black tracking-tight text-white sm:text-5xl lg:text-6xl">
+                    LoL Lore Content Generator
+                  </h1>
+                  <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">
+                    Generate accurate, cinematic League of Legends lore scripts for TikTok, Shorts, Reels, and podcast-style narration.
+                  </p>
+                  <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
+                    Built for a daily workflow: create a voice-ready lore pack, send the narration to ElevenLabs, then clean the exported audio below.
+                  </p>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  {[
+                    ["Canon-first", "Prompted to avoid fake lore and headcanon."],
+                    ["Retention-ready", "Hooks, twists, climax, and final line."],
+                    ["Voice-ready", "Natural narration for ElevenLabs delivery."],
+                  ].map(([title, description]) => (
+                    <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                      <h3 className="font-bold text-white">{title}</h3>
+                      <p className="mt-2 text-sm leading-6 text-slate-400">{description}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <form onSubmit={(event) => handleLoreSubmit(event, "custom")} className="rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-5">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <SelectField
+                    label="Content type"
+                    value={loreContentType}
+                    onChange={(value) => setLoreContentType(value as LoreContentType)}
+                    options={loreContentTypeOptions}
+                  />
+                  <SelectField
+                    label="Tone"
+                    value={loreTone}
+                    onChange={(value) => setLoreTone(value as LoreTone)}
+                    options={tones}
+                  />
+                  <SelectField
+                    label="Platform"
+                    value={lorePlatform}
+                    onChange={(value) => setLorePlatform(value as LorePlatform)}
+                    options={platforms}
+                  />
+                  <SelectField
+                    label="Duration"
+                    value={loreDuration}
+                    onChange={(value) => setLoreDuration(value as LoreDuration)}
+                    options={durations}
+                  />
+                  <SelectField
+                    label="Language"
+                    value={loreLanguage}
+                    onChange={(value) => setLoreLanguage(value as LoreLanguage)}
+                    options={languages}
+                  />
+                  <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-sm leading-6 text-cyan-50/85">
+                    Default: English, TikTok, Mysterious, 1min30.
+                  </div>
+                </div>
+
+                <label className="mt-4 block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Topic</span>
+                  <input
+                    value={loreTopic}
+                    onChange={(event) => setLoreTopic(event.target.value)}
+                    placeholder='Example: "The fall of Icathia", "Aatrox", "The Watchers"'
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
+                  />
+                </label>
+
+                {loreError ? (
+                  <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                    {loreError}
+                  </div>
+                ) : null}
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={(event) => handleLoreSubmit(event, "daily")}
+                    disabled={isLoreGenerating}
+                    className="rounded-2xl border border-violet-200/40 bg-violet-300/10 px-5 py-4 font-black text-violet-50 transition hover:bg-violet-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isLoreGenerating ? "Generating..." : "Generate Today's Lore Script"}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isLoreGenerating}
+                    className="rounded-2xl bg-gradient-to-r from-violet-300 via-cyan-300 to-fuchsia-300 px-5 py-4 font-black text-slate-950 shadow-[0_18px_70px_rgba(168,85,247,0.22)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                  >
+                    {isLoreGenerating ? "Generating..." : "Generate From My Topic"}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {loreResult ? (
+              <div className="mt-8 space-y-5">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-emerald-300/20 bg-emerald-400/10 p-4">
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-100/70">Production pack ready</p>
+                    <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.title}</h2>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => downloadTextFile("lol-lore-script.txt", scriptAsText(loreResult))}
+                      className="rounded-full border border-white/10 bg-white px-4 py-2 text-sm font-bold text-slate-950"
+                    >
+                      Download script.txt
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => downloadTextFile("lol-lore-production-pack.json", JSON.stringify(loreResult, null, 2), "application/json")}
+                      className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-bold text-white"
+                    >
+                      Download production-pack.json
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 lg:grid-cols-2">
+                  <TextResultCard title="Viral title" value={loreResult.title} />
+                  <TextResultCard title="Short hook" value={loreResult.hook} />
+                  <TextResultCard title="Full narration script" value={loreResult.script} multiline />
+                  <TextResultCard title="Voice-ready version" value={loreResult.voiceReadyScript} multiline />
+                  <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
+                  <VisualBeatsCard beats={loreResult.visualBeats} />
+                  <TextResultCard title="TikTok description" value={loreResult.tiktokDescription} />
+                  <TextResultCard title="Instagram caption" value={loreResult.instagramCaption} />
+                  <TextResultCard title="YouTube Shorts title" value={loreResult.youtubeShortsTitle} />
+                  <ListResultCard title="Hashtags" items={loreResult.hashtags} />
+                  <TextResultCard title="Pinned comment question" value={loreResult.pinnedComment} />
+                </div>
+              </div>
+            ) : (
+              <div className="mt-8 rounded-3xl border border-white/10 bg-white/[0.035] p-5 text-sm leading-6 text-slate-400">
+                Your generated lore pack will appear here with copy buttons for every block and downloads for script and JSON production files.
+              </div>
+            )}
+          </div>
+        </section>
+
+        <div className="flex items-center gap-4 py-2">
+          <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/15 to-white/5" />
+          <p className="text-xs font-bold uppercase tracking-[0.34em] text-slate-500">Step 2 - Clean ElevenLabs audio</p>
+          <div className="h-px flex-1 bg-gradient-to-r from-white/5 via-white/15 to-transparent" />
+        </div>
 
         <div className="grid items-center gap-8 lg:grid-cols-[1fr_0.86fr]">
           <div className="space-y-7">
@@ -475,6 +756,133 @@ export default function HomePage() {
         </section>
       </section>
     </main>
+  );
+}
+
+function CopyButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleCopy}
+      className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-cyan-200/50 hover:text-white"
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+function TextResultCard({ title, value, multiline = false }: { title: string; value: string; multiline?: boolean }) {
+  return (
+    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-bold text-white">{title}</h3>
+        <CopyButton value={value} />
+      </div>
+      <p className={`${multiline ? "whitespace-pre-wrap" : ""} text-sm leading-7 text-slate-300`}>{value}</p>
+    </article>
+  );
+}
+
+function ListResultCard({ title, items }: { title: string; items: string[] }) {
+  const value = items.join("\n");
+
+  return (
+    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-bold text-white">{title}</h3>
+        <CopyButton value={value} />
+      </div>
+      <ul className="space-y-2 text-sm leading-6 text-slate-300">
+        {items.map((item) => (
+          <li key={item} className="rounded-2xl bg-white/[0.035] px-3 py-2">
+            {item}
+          </li>
+        ))}
+      </ul>
+    </article>
+  );
+}
+
+function VisualBeatsCard({ beats }: { beats: LorePack["visualBeats"] }) {
+  const value = beats.map((beat) => `${beat.beat}: ${beat.visualSuggestion}`).join("\n");
+
+  return (
+    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-bold text-white">Suggested visual beats</h3>
+        <CopyButton value={value} />
+      </div>
+      <div className="space-y-3">
+        {beats.map((beat) => (
+          <div key={`${beat.beat}-${beat.visualSuggestion}`} className="rounded-2xl bg-white/[0.035] p-3">
+            <p className="text-sm font-bold text-cyan-100">{beat.beat}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-300">{beat.visualSuggestion}</p>
+          </div>
+        ))}
+      </div>
+    </article>
+  );
+}
+
+function DownloadButton({ label, fileName, content, mimeType }: { label: string; fileName: string; content: string; mimeType: string }) {
+  const href = useMemo(() => {
+    const blob = new Blob([content], { type: mimeType });
+    return URL.createObjectURL(blob);
+  }, [content, mimeType]);
+
+  useEffect(() => {
+    return () => URL.revokeObjectURL(href);
+  }, [href]);
+
+  return (
+    <a
+      href={href}
+      download={fileName}
+      className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-center text-sm font-bold text-white transition hover:border-cyan-200/50 hover:bg-cyan-300/10"
+    >
+      {label}
+    </a>
+  );
+}
+
+function SelectField<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly T[];
+  onChange: (value: T) => void;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-200">{label}</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value as T)}
+        className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-slate-100 outline-none transition focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 

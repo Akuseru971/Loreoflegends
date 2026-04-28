@@ -1,24 +1,51 @@
 # Audio Pace Cleaner
 
-Audio Pace Cleaner is a Vercel-ready SaaS MVP for creators who already have
-audio narration and want tighter pacing for TikTok, YouTube Shorts, Instagram
-Reels, podcasts, and other short-form content.
+Audio Pace Cleaner is a Vercel-ready creator SaaS MVP with a two-step short-form
+workflow:
 
-The app does not generate videos or voices. It only uploads existing audio,
-detects long silent gaps, and shortens those pauses while preserving the voice
-track itself.
+1. Generate a League of Legends lore script pack.
+2. Upload the ElevenLabs narration audio and tighten long silent gaps.
+
+The app does not generate videos or voices. It generates text-only lore script
+packs through the OpenAI API, then processes existing uploaded audio with
+FFmpeg.
 
 ## Features
 
 - Next.js App Router and TypeScript
 - Premium dark, mobile-responsive upload UI
+- League of Legends lore script generator for TikTok, Shorts, Reels, and podcast
+  shorts
+- Server-side `POST /api/generate-lol-lore` route using `OPENAI_API_KEY`
 - Drag-and-drop audio upload with before/after previews
 - Settings for pacing mode, silence threshold, minimum silence, remaining pause,
   and output format
 - Server-side `POST /api/process-audio` route
 - FFmpeg-static based processing for Vercel compatibility
 - 25 MB MVP upload limit
-- No database, login, Stripe, video rendering, or API keys
+- No database, login, Stripe, video rendering, image generation, or automatic
+  posting
+
+## Lore script generator
+
+The generator creates production-ready League of Legends lore packs with:
+
+- Viral title
+- Short hook
+- Full narration script
+- ElevenLabs-ready voice script
+- Caption-friendly lines
+- Suggested visual beats
+- TikTok description
+- Instagram caption
+- YouTube Shorts title
+- Hashtags
+- Pinned comment question
+
+The backend prompt emphasizes official Riot canon accuracy, no invented lore,
+strong short-form retention, natural narration, and target durations between
+1min15 and 1min40. If the first response falls outside the requested word-count
+range, the API asks the model to regenerate once before returning.
 
 ## Audio behavior
 
@@ -56,9 +83,11 @@ npm run build
 
 ## Configuration
 
-No environment variables are required. Optional FFmpeg overrides are available:
+Set the OpenAI API key for the lore generator. Optional FFmpeg overrides are
+available:
 
 ```bash
+OPENAI_API_KEY=
 FFMPEG_PATH=
 AUDIO_PACE_WORKDIR=/tmp/audio-pace-cleaner
 ```
@@ -66,6 +95,21 @@ AUDIO_PACE_WORKDIR=/tmp/audio-pace-cleaner
 By default the app uses the bundled `ffmpeg-static` binary.
 
 ## API
+
+`POST /api/generate-lol-lore`
+
+JSON body:
+
+- `contentType`: `Lore Event`, `Champion Lore`, or `Lore Fun Fact`
+- `topic`: custom topic for `mode: "custom"`
+- `tone`: `Mysterious`, `Epic`, `Dark`, `Tragic`, `Cinematic`, or
+  `Kindred-style`
+- `platform`: `TikTok`, `YouTube Shorts`, `Instagram Reels`, or `Podcast Short`
+- `duration`: `1min15`, `1min30`, or `1min40`
+- `language`: `English`, `French`, or `Spanish`
+- `mode`: `daily` or `custom`
+
+Returns a JSON production pack for short-form lore content.
 
 `POST /api/process-audio`
 

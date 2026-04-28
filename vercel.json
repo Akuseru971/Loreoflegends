@@ -5,6 +5,9 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "functions": {
+    "app/api/generate-lol-lore/route.ts": {
+      "maxDuration": 60
+    },
     "app/api/process-audio/route.ts": {
       "maxDuration": 60
     }
