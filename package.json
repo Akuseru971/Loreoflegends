@@ -1,0 +1,44 @@
+{
+  "name": "loreoflegends",
+  "version": "1.0.0",
+  "description": "Full-stack SaaS for creating League of Legends short-form videos from web imagery.",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "worker": "tsx lib/worker/render-worker.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Akuseru971/Loreoflegends.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/Akuseru971/Loreoflegends/issues"
+  },
+  "homepage": "https://github.com/Akuseru971/Loreoflegends#readme",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.1",
+    "clsx": "^2.1.1",
+    "nanoid": "^5.1.9",
+    "next": "^16.2.4",
+    "openai": "^6.35.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.4",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
+  }
+}
