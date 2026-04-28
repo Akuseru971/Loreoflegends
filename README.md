@@ -44,8 +44,8 @@ The generator creates production-ready League of Legends lore packs with:
 
 The backend prompt emphasizes official Riot canon accuracy, no invented lore,
 strong short-form retention, natural narration, and target durations between
-1min15 and 1min40. If the first response falls outside the requested word-count
-range, the API asks the model to regenerate once before returning.
+1min15 and 1min40. Word count is returned as metadata only and does not block
+the generated script from being shown.
 
 ## Audio behavior
 

@@ -127,7 +127,6 @@ function buildPrompt({
   platform,
   duration,
   language,
-  retryInstruction,
 }: {
   contentType: string;
   topic: string;
@@ -135,7 +134,6 @@ function buildPrompt({
   platform: string;
   duration: keyof typeof durationWordRanges;
   language: string;
-  retryInstruction?: string;
 }) {
   const range = durationWordRanges[duration];
 
@@ -198,8 +196,7 @@ Output field guidance:
 - tiktokDescription, instagramCaption, youtubeShortsTitle: platform-ready copy.
 - hashtags: 8-14 relevant hashtags.
 - pinnedComment: one question that invites lore discussion.
-
-${retryInstruction ?? ""}`;
+`;
 }
 
 async function generatePack(openai: OpenAI, prompt: string) {
@@ -251,15 +248,10 @@ export async function POST(request: NextRequest) {
   }
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const range = durationWordRanges[duration];
 
   try {
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const retryInstruction =
-        attempt === 1
-          ? `Regenerate now. The previous script length was outside the required range. The "script" field must be ${range.min}-${range.max} words.`
-          : undefined;
-      const prompt = buildPrompt({ contentType, topic, tone, platform, duration, language, retryInstruction });
+      const prompt = buildPrompt({ contentType, topic, tone, platform, duration, language });
       const rawPack = await generatePack(openai, prompt);
       const pack = validateLorePack(rawPack);
 
@@ -271,16 +263,7 @@ export async function POST(request: NextRequest) {
       }
 
       const wordCount = countWords(pack.script);
-      if (wordCount >= range.min && wordCount <= range.max) {
-        return NextResponse.json({ ...pack, selectedTopic: topic, selectedContentType: contentType, wordCount });
-      }
-
-      if (attempt === 1) {
-        return jsonError(
-          `Script length was ${wordCount} words, but ${duration} requires ${range.min}-${range.max} words.`,
-          502,
-        );
-      }
+      return NextResponse.json({ ...pack, selectedTopic: topic, selectedContentType: contentType, wordCount });
     }
 
     return jsonError("Unable to generate a valid lore script.", 502);
