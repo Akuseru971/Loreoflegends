@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import { existsSync } from "fs";
 import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
@@ -41,7 +42,16 @@ type FfmpegResult = {
 };
 
 function getFfmpegPath() {
-  return process.env.FFMPEG_PATH || ffmpegPath || "ffmpeg";
+  if (process.env.FFMPEG_PATH) {
+    return process.env.FFMPEG_PATH;
+  }
+
+  const candidates = [
+    ffmpegPath,
+    path.join(process.cwd(), "node_modules", "ffmpeg-static", "ffmpeg"),
+  ].filter(Boolean) as string[];
+
+  return candidates.find((candidate) => existsSync(candidate)) ?? "ffmpeg";
 }
 
 function jsonError(message: string, status = 400) {
