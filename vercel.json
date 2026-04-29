@@ -3,19 +3,5 @@
   "framework": "nextjs",
   "installCommand": "npm install",
   "buildCommand": "npm run build",
-  "outputDirectory": ".next",
-  "functions": {
-    "app/api/verify-lol-lore/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/generate-elevenlabs-audio/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/generate-lol-lore/route.ts": {
-      "maxDuration": 60
-    },
-    "app/api/process-audio/route.ts": {
-      "maxDuration": 60
-    }
-  }
+  "outputDirectory": ".next"
 }

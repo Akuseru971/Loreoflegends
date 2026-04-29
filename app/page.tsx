@@ -205,6 +205,74 @@ function scriptAsText(pack: LorePack) {
   ].join("\n");
 }
 
+type ProgressState = {
+  label: string;
+  detail: string;
+  percent: number;
+  steps: string[];
+};
+
+function progressForState({
+  isLoreGenerating,
+  isVerifyingLore,
+  isGeneratingVoice,
+  isCleaningGeneratedAudio,
+  isProcessing,
+}: {
+  isLoreGenerating: boolean;
+  isVerifyingLore: boolean;
+  isGeneratingVoice: boolean;
+  isCleaningGeneratedAudio: boolean;
+  isProcessing: boolean;
+}): ProgressState | null {
+  if (isLoreGenerating) {
+    return {
+      label: "Generating lore script",
+      detail: "Building canon structure, retention beats, and production metadata.",
+      percent: 34,
+      steps: ["Prompt", "Canon structure", "Quality pass"],
+    };
+  }
+
+  if (isVerifyingLore) {
+    return {
+      label: "Verifying lore accuracy",
+      detail: "Checking risky claims, outdated canon, and safer wording.",
+      percent: 52,
+      steps: ["Read script", "Check claims", "Rewrite safely"],
+    };
+  }
+
+  if (isGeneratingVoice) {
+    return {
+      label: "Generating ElevenLabs audio",
+      detail: "Sending the final editable script to the secure server route.",
+      percent: 68,
+      steps: ["Prepare text", "Create voice", "Return MP3"],
+    };
+  }
+
+  if (isCleaningGeneratedAudio) {
+    return {
+      label: "Cleaning generated audio",
+      detail: "Reducing long pauses with the current Audio Pace Cleaner settings.",
+      percent: 82,
+      steps: ["Analyze silence", "Shorten pauses", "Export MP3"],
+    };
+  }
+
+  if (isProcessing) {
+    return {
+      label: "Processing uploaded audio",
+      detail: "Detecting silence and rebuilding the track without changing voice speed.",
+      percent: 78,
+      steps: ["Upload file", "Analyze silence", "Export audio"],
+    };
+  }
+
+  return null;
+}
+
 export default function HomePage() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -253,6 +321,13 @@ export default function HomePage() {
   const [isVerifyingLore, setIsVerifyingLore] = useState(false);
 
   const selectedMode = modes[mode];
+  const activeProgress = progressForState({
+    isLoreGenerating,
+    isVerifyingLore,
+    isGeneratingVoice,
+    isCleaningGeneratedAudio,
+    isProcessing,
+  });
 
   useEffect(() => {
     return () => {
@@ -640,6 +715,8 @@ export default function HomePage() {
             Generate script. Voice it. Clean the pacing.
           </div>
         </nav>
+
+        <WorkflowProgressBar progress={activeProgress} />
 
         <section className="rounded-[2.25rem] border border-violet-200/15 bg-violet-300/[0.035] p-5 shadow-2xl shadow-black/30 backdrop-blur-xl">
           <div className="rounded-[1.75rem] border border-white/10 bg-slate-950/70 p-6 sm:p-8">
@@ -1391,6 +1468,58 @@ function VerificationList<T>({ title, items, render }: { title: string; items: T
         <p className="mt-3 text-sm text-slate-500">No items reported.</p>
       )}
     </details>
+  );
+}
+
+function WorkflowProgressBar({ progress }: { progress: ProgressState | null }) {
+  if (!progress) {
+    return null;
+  }
+
+  const clampedPercent = Math.min(Math.max(progress.percent, 0), 100);
+
+  return (
+    <div className="sticky top-4 z-20 rounded-3xl border border-cyan-200/20 bg-slate-950/85 p-4 shadow-2xl shadow-black/30 backdrop-blur-xl">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-[0.28em] text-cyan-100/70">Processing</p>
+          <h2 className="mt-1 text-lg font-black text-white">{progress.label}</h2>
+        </div>
+        <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-sm font-bold text-cyan-100">
+          {clampedPercent}%
+        </span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-white/[0.06]">
+        <div
+          className="h-full rounded-full bg-gradient-to-r from-cyan-300 via-violet-300 to-fuchsia-300 transition-all duration-700"
+          style={{ width: `${clampedPercent}%` }}
+        />
+      </div>
+      <p className="mt-3 text-sm leading-6 text-slate-300">{progress.detail}</p>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        {progress.steps.map((step, index) => {
+          const isDone = clampedPercent >= ((index + 1) / progress.steps.length) * 100;
+          const isActive =
+            clampedPercent >= (index / progress.steps.length) * 100 &&
+            clampedPercent < ((index + 1) / progress.steps.length) * 100;
+
+          return (
+            <div
+              key={step}
+              className={`rounded-2xl border px-3 py-2 text-xs font-semibold ${
+                isDone
+                  ? "border-emerald-300/20 bg-emerald-300/10 text-emerald-100"
+                  : isActive
+                    ? "border-cyan-300/25 bg-cyan-300/10 text-cyan-100"
+                    : "border-white/10 bg-white/[0.035] text-slate-500"
+              }`}
+            >
+              {step}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

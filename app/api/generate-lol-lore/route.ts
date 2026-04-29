@@ -2,7 +2,6 @@ import OpenAI from "openai";
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
 
 const contentTypes = ["Lore Event", "Champion Lore", "Lore Fun Fact"] as const;
 const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-style"] as const;
