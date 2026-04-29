@@ -472,6 +472,102 @@ async function generatePack(openai: OpenAI, prompt: string) {
   return JSON.parse(content) as unknown;
 }
 
+function buildIntegratedAccuracyPrompt({
+  pack,
+  topic,
+  contentType,
+  language,
+}: {
+  pack: LorePack;
+  topic: string;
+  contentType: string;
+  language: string;
+}) {
+  return `Verify and correct this generated League of Legends lore production pack before it reaches the user.
+
+Return ONLY valid JSON matching the same production pack schema. No markdown. No text outside JSON.
+
+JSON schema:
+{
+  "title": string,
+  "hook": string,
+  "script": string,
+  "voiceReadyScript": string,
+  "captionVersion": string[],
+  "hookVariants": string[],
+  "alternateTitles": string[],
+  "visualBeats": [{ "beat": string, "visualSuggestion": string }],
+  "retentionBreakdown": [
+    { "moment": string, "purpose": string, "text": string }
+  ],
+  "loreAccuracyNotes": [
+    { "fact": string, "whyItMatters": string }
+  ],
+  "tiktokDescription": string,
+  "instagramCaption": string,
+  "youtubeShortsTitle": string,
+  "hashtags": string[],
+  "pinnedComment": string
+}
+
+Context:
+- Topic: ${topic || pack.title}
+- Content type: ${contentType}
+- Language: ${language}
+
+Production pack to verify and correct:
+${JSON.stringify(pack)}
+
+Strict canon rules:
+- Be conservative and current Riot / Runeterra canon focused.
+- Remove invented factions, titles, relationships, causes, motives, powers, locations, or timelines.
+- Remove outdated League institution framing or old removed champion backgrounds.
+- Remove fan theories and unsupported emotional or political consequences presented as fact.
+- If a claim is plausible but not confirmed, remove it or use safer wording.
+- Do not add citations or repeated phrases like "according to Riot", "officially", or "in canon" inside the script.
+- Do not rewrite everything unnecessarily. Keep accurate content and the same social-media energy.
+- Preserve the same language, approximate duration, short-form structure, educational value, and voice-ready rhythm.
+- The final script returned in "script" and "voiceReadyScript" must be the clean, final, lore-accurate version.
+- The user should not need a separate accuracy scanner. This response is the final publish-ready pack.
+
+Output requirements:
+- Keep the production pack useful for TikTok, Shorts, Reels, and podcast shorts.
+- Ensure loreAccuracyNotes contain only confirmed facts actually used in the corrected script.
+- Ensure retentionBreakdown and captions match the corrected script.
+- Ensure title, hook variants, alternate titles, descriptions, hashtags, and pinned comment remain accurate and non-clickbait.`;
+}
+
+async function canonCleanPack(openai: OpenAI, pack: LorePack, topic: string, contentType: string, language: string) {
+  const completion = await openai.chat.completions.create({
+    model: process.env.OPENAI_MODEL || "gpt-4o-mini",
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a strict League of Legends lore accuracy editor. You correct generated content to current Riot canon and never invent facts.",
+      },
+      {
+        role: "user",
+        content: buildIntegratedAccuracyPrompt({ pack, topic, contentType, language }),
+      },
+    ],
+  });
+
+  const content = completion.choices[0]?.message.content;
+  if (!content) {
+    throw new Error("The lore accuracy pass returned an empty response.");
+  }
+
+  return JSON.parse(content) as unknown;
+}
+
+async function finalizeLorePack(openai: OpenAI, pack: LorePack, topic: string, contentType: string, language: string) {
+  const rawCleanedPack = await canonCleanPack(openai, pack, topic, contentType, language);
+  return validateLorePack(rawCleanedPack) ?? pack;
+}
+
 export async function POST(request: NextRequest) {
   let payload: LoreRequest;
   try {
@@ -532,23 +628,25 @@ export async function POST(request: NextRequest) {
         return jsonError("Invalid response format from the lore generator.", 502);
       }
 
-      const wordCount = countWords(pack.script);
-      const issues = qualityIssues(pack, durationWordRanges[duration]);
+      const cleanPack = await finalizeLorePack(openai, pack, topic || pack.title, contentType, language);
+      const wordCount = countWords(cleanPack.script);
+      const issues = qualityIssues(cleanPack, durationWordRanges[duration]);
 
       if (issues.length === 0) {
         return NextResponse.json({
-          ...pack,
+          ...cleanPack,
           selectedTopic: topic,
           selectedContentType: contentType,
           selectedNarrativeAngle: narrativeAngle,
           selectedAudienceLevel: audienceLevel,
           selectedCreatorGoal: creatorGoal,
           wordCount,
-          qualityReport: qualityReport(pack, durationWordRanges[duration]),
+          qualityReport: qualityReport(cleanPack, durationWordRanges[duration]),
+          qualityNote: "Lore accuracy guardrail completed internally. Final script is the cleaned canon-safe version.",
         });
       }
 
-      fallbackPack = { ...pack, wordCount };
+      fallbackPack = { ...cleanPack, wordCount };
     }
 
     if (fallbackPack) {
@@ -560,7 +658,7 @@ export async function POST(request: NextRequest) {
         selectedAudienceLevel: audienceLevel,
         selectedCreatorGoal: creatorGoal,
         qualityReport: qualityReport(fallbackPack, durationWordRanges[duration]),
-        qualityNote: "Returned after one regeneration attempt. Review the retention and accuracy notes before recording.",
+        qualityNote: "Lore accuracy guardrail completed internally. Returned the best cleaned version after one regeneration attempt.",
       });
     }
 
