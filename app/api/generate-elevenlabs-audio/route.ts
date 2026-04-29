@@ -49,7 +49,7 @@ function parseElevenLabsError(status: number, payload: unknown) {
     return "Invalid ElevenLabs API key.";
   }
 
-  if (status === 404) {
+  if (status === 404 || lowerMessage.includes("invalid id")) {
     return "Invalid ElevenLabs Voice ID.";
   }
 
@@ -115,8 +115,8 @@ export async function POST(request: NextRequest) {
     return jsonError("Invalid request body.");
   }
 
-  const apiKey = payload.apiKey?.trim() ?? "";
-  const voiceId = payload.voiceId?.trim() ?? "";
+  const apiKey = payload.apiKey?.trim() || process.env.ELEVENLABS_API_KEY?.trim() || "";
+  const voiceId = payload.voiceId?.trim() || process.env.ELEVENLABS_VOICE_ID?.trim() || "";
   const text = payload.text?.trim() ?? "";
   const modelId =
     typeof payload.modelId === "string" && allowedModels.has(payload.modelId)
@@ -124,11 +124,11 @@ export async function POST(request: NextRequest) {
       : "eleven_multilingual_v2";
 
   if (!apiKey) {
-    return jsonError("Please enter your ElevenLabs API key.");
+    return jsonError("Missing ElevenLabs API key. Add ELEVENLABS_API_KEY to your environment or enter an API key.");
   }
 
   if (!voiceId) {
-    return jsonError("Please enter your ElevenLabs Voice ID.");
+    return jsonError("Missing ElevenLabs Voice ID. Add ELEVENLABS_VOICE_ID to your environment or enter a Voice ID.");
   }
 
   if (!text) {

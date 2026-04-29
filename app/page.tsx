@@ -311,14 +311,6 @@ export default function HomePage() {
     setVoiceNotice("");
 
     const text = editableScript.trim();
-    if (!elevenLabsApiKey.trim()) {
-      setVoiceError("Please enter your ElevenLabs API key.");
-      return;
-    }
-    if (!elevenLabsVoiceId.trim()) {
-      setVoiceError("Please enter your ElevenLabs Voice ID.");
-      return;
-    }
     if (!text) {
       setVoiceError("Please write or generate a script first.");
       return;
@@ -670,27 +662,27 @@ export default function HomePage() {
                     <div className="mb-4">
                       <h3 className="text-xl font-bold text-white">ElevenLabs Voice Settings</h3>
                       <p className="mt-1 text-sm leading-6 text-slate-400">
-                        Your API key is sent only to the server request and is not stored.
+                        Uses ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID from the server by default. Fill these only to override for this request.
                       </p>
                     </div>
                     <div className="space-y-4">
                       <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-200">API Key</span>
+                        <span className="mb-2 block text-sm font-bold text-slate-200">API Key override</span>
                         <input
                           value={elevenLabsApiKey}
                           onChange={(event) => setElevenLabsApiKey(event.target.value)}
                           type="password"
                           autoComplete="off"
-                          placeholder="Paste your ElevenLabs API key"
+                          placeholder="Optional - uses server env when empty"
                           className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
                         />
                       </label>
                       <label className="block">
-                        <span className="mb-2 block text-sm font-bold text-slate-200">Voice ID</span>
+                        <span className="mb-2 block text-sm font-bold text-slate-200">Voice ID override</span>
                         <input
                           value={elevenLabsVoiceId}
                           onChange={(event) => setElevenLabsVoiceId(event.target.value)}
-                          placeholder="Example: 21m00Tcm4TlvDq8ikWAM"
+                          placeholder="Optional - uses server env when empty"
                           className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
                         />
                       </label>

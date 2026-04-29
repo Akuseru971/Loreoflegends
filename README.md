@@ -75,12 +75,13 @@ shows: "No long pauses were detected. Your audio already seems tightly paced."
 ## ElevenLabs audio generation
 
 After a lore pack is generated, the script appears in an editable textarea. The
-edited script is what gets sent to ElevenLabs. Users paste their ElevenLabs API
-key and Voice ID for the current session, choose model and voice settings, then
-generate a raw MP3.
+edited script is what gets sent to ElevenLabs. By default, the backend uses
+`ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` from the deployment environment.
+The UI fields are optional overrides for a single request.
 
-The ElevenLabs API key is sent only to `POST /api/generate-elevenlabs-audio` and
-is not stored in a database, localStorage, or committed configuration.
+When an override key is pasted, it is sent only to
+`POST /api/generate-elevenlabs-audio` and is not stored in a database,
+localStorage, or committed configuration.
 
 Generated raw audio can be downloaded as `raw-elevenlabs-audio.mp3` or sent to
 the existing `/api/process-audio` route for pause reduction, then downloaded as
@@ -103,11 +104,13 @@ npm run build
 
 ## Configuration
 
-Set the OpenAI API key for the lore generator. Optional FFmpeg overrides are
-available:
+Set the OpenAI API key for the lore generator and ElevenLabs credentials for
+server-side voice generation. Optional FFmpeg overrides are available:
 
 ```bash
 OPENAI_API_KEY=
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
 FFMPEG_PATH=
 AUDIO_PACE_WORKDIR=/tmp/audio-pace-cleaner
 ```
@@ -135,8 +138,8 @@ Returns a JSON production pack for short-form lore content.
 
 JSON body:
 
-- `apiKey`: ElevenLabs API key supplied by the user for this request
-- `voiceId`: ElevenLabs Voice ID
+- `apiKey`: optional ElevenLabs API key override; defaults to `ELEVENLABS_API_KEY`
+- `voiceId`: optional ElevenLabs Voice ID override; defaults to `ELEVENLABS_VOICE_ID`
 - `text`: edited script text
 - `modelId`: `eleven_multilingual_v2`, `eleven_turbo_v2_5`, or
   `eleven_flash_v2_5`
