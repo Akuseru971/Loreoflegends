@@ -26,6 +26,15 @@ type LorePack = {
     beat: string;
     visualSuggestion: string;
   }[];
+  retentionBreakdown: {
+    moment: string;
+    purpose: string;
+    text: string;
+  }[];
+  loreAccuracyNotes: {
+    fact: string;
+    whyItMatters: string;
+  }[];
   tiktokDescription: string;
   instagramCaption: string;
   youtubeShortsTitle: string;
@@ -130,6 +139,12 @@ function scriptAsText(pack: LorePack) {
     "",
     "Suggested visual beats:",
     ...pack.visualBeats.map((item) => `- ${item.beat}: ${item.visualSuggestion}`),
+    "",
+    "Retention breakdown:",
+    ...pack.retentionBreakdown.map((item) => `- ${item.moment}: ${item.purpose} (${item.text})`),
+    "",
+    "Lore accuracy notes:",
+    ...pack.loreAccuracyNotes.map((item) => `- ${item.fact}: ${item.whyItMatters}`),
     "",
     `TikTok description: ${pack.tiktokDescription}`,
     "",
@@ -797,6 +812,8 @@ export default function HomePage() {
                   <TextResultCard title="Viral title" value={loreResult.title} />
                   <TextResultCard title="Short hook" value={loreResult.hook} />
                   <TextResultCard title="Voice-ready version" value={loreResult.voiceReadyScript} multiline />
+                  <RetentionBreakdownCard items={loreResult.retentionBreakdown} />
+                  <LoreAccuracyNotesCard items={loreResult.loreAccuracyNotes} />
                   <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
                   <VisualBeatsCard beats={loreResult.visualBeats} />
                   <TextResultCard title="TikTok description" value={loreResult.tiktokDescription} />
@@ -1254,6 +1271,49 @@ function AudioOutputCard({
         <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">{emptyText}</div>
       )}
     </article>
+  );
+}
+
+function RetentionBreakdownCard({ items }: { items: LorePack["retentionBreakdown"] }) {
+  const value = items.map((item) => `${item.moment}: ${item.purpose}\n${item.text}`).join("\n\n");
+
+  return (
+    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
+        <span>Retention Breakdown</span>
+        <CopyButton value={value} />
+      </summary>
+      <div className="mt-4 grid gap-3 md:grid-cols-2">
+        {items.map((item) => (
+          <div key={`${item.moment}-${item.text}`} className="rounded-2xl bg-white/[0.035] p-3">
+            <p className="text-sm font-bold text-violet-100">{item.moment}</p>
+            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{item.purpose}</p>
+            <p className="mt-2 text-sm leading-6 text-slate-300">{item.text}</p>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function LoreAccuracyNotesCard({ items }: { items: LorePack["loreAccuracyNotes"] }) {
+  const value = items.map((item) => `${item.fact}: ${item.whyItMatters}`).join("\n");
+
+  return (
+    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
+        <span>Lore Accuracy Notes</span>
+        <CopyButton value={value} />
+      </summary>
+      <div className="mt-4 space-y-3">
+        {items.map((item) => (
+          <div key={`${item.fact}-${item.whyItMatters}`} className="rounded-2xl bg-white/[0.035] p-3">
+            <p className="text-sm font-bold text-cyan-100">{item.fact}</p>
+            <p className="mt-1 text-sm leading-6 text-slate-300">{item.whyItMatters}</p>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

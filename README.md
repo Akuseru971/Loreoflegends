@@ -42,6 +42,8 @@ The generator creates production-ready League of Legends lore packs with:
 - ElevenLabs-ready voice script
 - Caption-friendly lines
 - Suggested visual beats
+- Retention breakdown
+- Lore accuracy notes for creator-side validation
 - TikTok description
 - Instagram caption
 - YouTube Shorts title
@@ -49,9 +51,12 @@ The generator creates production-ready League of Legends lore packs with:
 - Pinned comment question
 
 The backend prompt emphasizes official Riot canon accuracy, no invented lore,
-strong short-form retention, natural narration, and target durations between
-1min15 and 1min40. Word count is returned as metadata only and does not block
-the generated script from being shown.
+educational cause-and-effect explanations, concrete lore facts, strong
+short-form retention, natural narration, and target durations between 1min15 and
+1min40. The API performs a quality check for structure, concrete facts, hook,
+final payoff, and generic filler, then regenerates once if the first result is
+weak. Word count is returned as metadata only and does not block the generated
+script from being shown.
 
 ## Audio behavior
 
