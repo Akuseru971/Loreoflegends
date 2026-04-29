@@ -4,11 +4,12 @@ Audio Pace Cleaner is a Vercel-ready creator SaaS MVP with a two-step short-form
 workflow:
 
 1. Generate a League of Legends lore script pack.
-2. Upload the ElevenLabs narration audio and tighten long silent gaps.
+2. Edit the script and generate narration with ElevenLabs.
+3. Clean the generated or uploaded narration audio to tighten long silent gaps.
 
-The app does not generate videos or voices. It generates text-only lore script
-packs through the OpenAI API, then processes existing uploaded audio with
-FFmpeg.
+The app does not generate videos. It generates text-only lore script packs
+through the OpenAI API, can call ElevenLabs text-to-speech from a server route
+with a user-supplied session key, then processes audio with FFmpeg.
 
 ## Features
 
@@ -17,6 +18,11 @@ FFmpeg.
 - League of Legends lore script generator for TikTok, Shorts, Reels, and podcast
   shorts
 - Server-side `POST /api/generate-lol-lore` route using `OPENAI_API_KEY`
+- Editable generated script textarea before voice generation
+- Server-side `POST /api/generate-elevenlabs-audio` route using a pasted
+  ElevenLabs API key for that request only
+- Raw ElevenLabs audio preview/download plus one-click cleanup through the
+  existing audio cleaner route
 - Drag-and-drop audio upload with before/after previews
 - Settings for pacing mode, silence threshold, minimum silence, remaining pause,
   and output format
@@ -66,6 +72,20 @@ Modes:
 If no matching pauses are found, the API returns the original file and the UI
 shows: "No long pauses were detected. Your audio already seems tightly paced."
 
+## ElevenLabs audio generation
+
+After a lore pack is generated, the script appears in an editable textarea. The
+edited script is what gets sent to ElevenLabs. Users paste their ElevenLabs API
+key and Voice ID for the current session, choose model and voice settings, then
+generate a raw MP3.
+
+The ElevenLabs API key is sent only to `POST /api/generate-elevenlabs-audio` and
+is not stored in a database, localStorage, or committed configuration.
+
+Generated raw audio can be downloaded as `raw-elevenlabs-audio.mp3` or sent to
+the existing `/api/process-audio` route for pause reduction, then downloaded as
+`cleaned-dynamic-audio.mp3`.
+
 ## Setup
 
 ```bash
@@ -110,6 +130,22 @@ JSON body:
 - `mode`: `daily` or `custom`
 
 Returns a JSON production pack for short-form lore content.
+
+`POST /api/generate-elevenlabs-audio`
+
+JSON body:
+
+- `apiKey`: ElevenLabs API key supplied by the user for this request
+- `voiceId`: ElevenLabs Voice ID
+- `text`: edited script text
+- `modelId`: `eleven_multilingual_v2`, `eleven_turbo_v2_5`, or
+  `eleven_flash_v2_5`
+- `stability`: number between `0` and `1`
+- `similarityBoost`: number between `0` and `1`
+- `style`: number between `0` and `1`
+- `speakerBoost`: boolean
+
+Returns an MP3 audio blob.
 
 `POST /api/process-audio`
 

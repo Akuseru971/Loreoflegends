@@ -7,12 +7,14 @@ const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-sty
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
 const durations = ["1min15", "1min30", "1min40"] as const;
 const languages = ["English", "French", "Spanish"] as const;
+const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5"] as const;
 
 type LoreContentType = (typeof loreContentTypeOptions)[number];
 type LoreTone = (typeof tones)[number];
 type LorePlatform = (typeof platforms)[number];
 type LoreDuration = (typeof durations)[number];
 type LoreLanguage = (typeof languages)[number];
+type ElevenLabsModel = (typeof elevenLabsModels)[number];
 
 type LorePack = {
   title: string;
@@ -165,6 +167,21 @@ export default function HomePage() {
   const [loreResult, setLoreResult] = useState<LorePack | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
+  const [editableScript, setEditableScript] = useState("");
+  const [elevenLabsApiKey, setElevenLabsApiKey] = useState("");
+  const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("");
+  const [elevenLabsModel, setElevenLabsModel] = useState<ElevenLabsModel>("eleven_multilingual_v2");
+  const [voiceStability, setVoiceStability] = useState(0.35);
+  const [voiceSimilarity, setVoiceSimilarity] = useState(0.85);
+  const [voiceStyle, setVoiceStyle] = useState(0.35);
+  const [speakerBoost, setSpeakerBoost] = useState(true);
+  const [voiceError, setVoiceError] = useState("");
+  const [voiceNotice, setVoiceNotice] = useState("");
+  const [isGeneratingVoice, setIsGeneratingVoice] = useState(false);
+  const [isCleaningGeneratedAudio, setIsCleaningGeneratedAudio] = useState(false);
+  const [rawAudioBlob, setRawAudioBlob] = useState<Blob | null>(null);
+  const [rawAudioUrl, setRawAudioUrl] = useState("");
+  const [cleanedGeneratedAudioUrl, setCleanedGeneratedAudioUrl] = useState("");
 
   const selectedMode = modes[mode];
 
@@ -178,6 +195,17 @@ export default function HomePage() {
       }
     };
   }, [beforeUrl, afterUrl]);
+
+  useEffect(() => {
+    return () => {
+      if (rawAudioUrl) {
+        URL.revokeObjectURL(rawAudioUrl);
+      }
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+      }
+    };
+  }, [rawAudioUrl, cleanedGeneratedAudioUrl]);
 
   const canProcess = useMemo(() => Boolean(file) && !isProcessing, [file, isProcessing]);
 
@@ -259,10 +287,136 @@ export default function HomePage() {
       }
 
       setLoreResult(payload);
+      setEditableScript(payload.script);
+      setVoiceError("");
+      setVoiceNotice("");
+      if (rawAudioUrl) {
+        URL.revokeObjectURL(rawAudioUrl);
+        setRawAudioUrl("");
+      }
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+        setCleanedGeneratedAudioUrl("");
+      }
+      setRawAudioBlob(null);
     } catch (submitError) {
       setLoreError(submitError instanceof Error ? submitError.message : "Network error while generating lore.");
     } finally {
       setIsLoreGenerating(false);
+    }
+  }
+
+  async function handleGenerateElevenLabsAudio() {
+    setVoiceError("");
+    setVoiceNotice("");
+
+    const text = editableScript.trim();
+    if (!elevenLabsApiKey.trim()) {
+      setVoiceError("Please enter your ElevenLabs API key.");
+      return;
+    }
+    if (!elevenLabsVoiceId.trim()) {
+      setVoiceError("Please enter your ElevenLabs Voice ID.");
+      return;
+    }
+    if (!text) {
+      setVoiceError("Please write or generate a script first.");
+      return;
+    }
+    if (text.length > 5000) {
+      setVoiceError("Script is too long for this MVP. Keep it under 5,000 characters.");
+      return;
+    }
+
+    setIsGeneratingVoice(true);
+
+    try {
+      const response = await fetch("/api/generate-elevenlabs-audio", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          apiKey: elevenLabsApiKey,
+          voiceId: elevenLabsVoiceId,
+          text,
+          modelId: elevenLabsModel,
+          stability: voiceStability,
+          similarityBoost: voiceSimilarity,
+          style: voiceStyle,
+          speakerBoost,
+        }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Audio generation failed.");
+      }
+
+      const audioBlob = await response.blob();
+
+      if (rawAudioUrl) {
+        URL.revokeObjectURL(rawAudioUrl);
+      }
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+        setCleanedGeneratedAudioUrl("");
+      }
+
+      setRawAudioBlob(audioBlob);
+      setRawAudioUrl(URL.createObjectURL(audioBlob));
+      setVoiceNotice("Raw ElevenLabs audio generated. You can preview, download, or clean it now.");
+    } catch (generationError) {
+      setVoiceError(generationError instanceof Error ? generationError.message : "Audio generation failed.");
+    } finally {
+      setIsGeneratingVoice(false);
+    }
+  }
+
+  async function handleCleanGeneratedAudio() {
+    setVoiceError("");
+    setVoiceNotice("");
+
+    if (!rawAudioBlob) {
+      setVoiceError("Generate ElevenLabs audio before cleaning it.");
+      return;
+    }
+
+    const audioFile = new File([rawAudioBlob], "raw-elevenlabs-audio.mp3", { type: "audio/mpeg" });
+    const formData = new FormData();
+    formData.append("file", audioFile);
+    formData.append("mode", mode);
+    formData.append("thresholdDb", String(threshold));
+    formData.append("minSilenceMs", String(minimumSilence));
+    formData.append("targetSilenceMs", String(remainingSilence));
+    formData.append("outputFormat", "mp3");
+
+    setIsCleaningGeneratedAudio(true);
+
+    try {
+      const response = await fetch("/api/process-audio", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Audio cleaning failed.");
+      }
+
+      const cleanedBlob = await response.blob();
+      const messageHeader = response.headers.get("x-audio-pace-message");
+
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+      }
+
+      setCleanedGeneratedAudioUrl(URL.createObjectURL(cleanedBlob));
+      setVoiceNotice(messageHeader ?? "Cleaned dynamic audio is ready.");
+    } catch (cleanError) {
+      setVoiceError(cleanError instanceof Error ? cleanError.message : "Audio cleaning failed.");
+    } finally {
+      setIsCleaningGeneratedAudio(false);
     }
   }
 
@@ -485,10 +639,171 @@ export default function HomePage() {
                   </div>
                 </div>
 
+                <div className="grid gap-5 xl:grid-cols-[1.1fr_0.9fr]">
+                  <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+                    <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="text-xl font-bold text-white">Script Editor</h3>
+                        <p className="mt-1 text-sm text-slate-400">Edit your script before generating the voice.</p>
+                      </div>
+                      <div className="flex gap-2">
+                        <CopyButton value={editableScript} />
+                        <button
+                          type="button"
+                          onClick={() => setEditableScript(loreResult.script)}
+                          className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-violet-200/50 hover:text-white"
+                        >
+                          Reset to Generated Script
+                        </button>
+                      </div>
+                    </div>
+                    <textarea
+                      value={editableScript}
+                      onChange={(event) => setEditableScript(event.target.value)}
+                      rows={13}
+                      className="w-full resize-y rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-7 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">{editableScript.trim().length} characters</p>
+                  </section>
+
+                  <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+                    <div className="mb-4">
+                      <h3 className="text-xl font-bold text-white">ElevenLabs Voice Settings</h3>
+                      <p className="mt-1 text-sm leading-6 text-slate-400">
+                        Your API key is sent only to the server request and is not stored.
+                      </p>
+                    </div>
+                    <div className="space-y-4">
+                      <label className="block">
+                        <span className="mb-2 block text-sm font-bold text-slate-200">API Key</span>
+                        <input
+                          value={elevenLabsApiKey}
+                          onChange={(event) => setElevenLabsApiKey(event.target.value)}
+                          type="password"
+                          autoComplete="off"
+                          placeholder="Paste your ElevenLabs API key"
+                          className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="mb-2 block text-sm font-bold text-slate-200">Voice ID</span>
+                        <input
+                          value={elevenLabsVoiceId}
+                          onChange={(event) => setElevenLabsVoiceId(event.target.value)}
+                          placeholder="Example: 21m00Tcm4TlvDq8ikWAM"
+                          className="w-full rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
+                        />
+                      </label>
+                      <SelectField
+                        label="Model"
+                        value={elevenLabsModel}
+                        onChange={(value) => setElevenLabsModel(value as ElevenLabsModel)}
+                        options={elevenLabsModels}
+                      />
+                      <SliderField label="Stability" value={voiceStability} min={0} max={1} step={0.01} suffix="" onChange={setVoiceStability} />
+                      <SliderField label="Similarity boost" value={voiceSimilarity} min={0} max={1} step={0.01} suffix="" onChange={setVoiceSimilarity} />
+                      <SliderField label="Style" value={voiceStyle} min={0} max={1} step={0.01} suffix="" onChange={setVoiceStyle} />
+                      <label className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3">
+                        <span>
+                          <span className="block text-sm font-bold text-slate-200">Speaker boost</span>
+                          <span className="text-xs text-slate-500">Default enabled for clearer narration.</span>
+                        </span>
+                        <input
+                          type="checkbox"
+                          checked={speakerBoost}
+                          onChange={(event) => setSpeakerBoost(event.target.checked)}
+                          className="size-5 accent-cyan-300"
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleGenerateElevenLabsAudio}
+                        disabled={isGeneratingVoice || isCleaningGeneratedAudio}
+                        className="w-full rounded-2xl bg-gradient-to-r from-violet-300 via-cyan-300 to-fuchsia-300 px-5 py-4 font-black text-slate-950 shadow-[0_18px_70px_rgba(168,85,247,0.22)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+                      >
+                        {isGeneratingVoice ? "Generating audio with ElevenLabs..." : "Generate Audio with ElevenLabs"}
+                      </button>
+                    </div>
+                  </section>
+                </div>
+
+                {(voiceError || voiceNotice) ? (
+                  <div
+                    className={`rounded-2xl border px-4 py-3 text-sm ${
+                      voiceError
+                        ? "border-rose-300/20 bg-rose-400/10 text-rose-100"
+                        : "border-emerald-300/20 bg-emerald-400/10 text-emerald-100"
+                    }`}
+                  >
+                    {voiceError || voiceNotice}
+                  </div>
+                ) : null}
+
+                <div className="grid gap-5 lg:grid-cols-2">
+                  <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-xl font-bold text-white">Audio Output</h3>
+                        <p className="mt-1 text-sm text-slate-400">Raw ElevenLabs Audio</p>
+                      </div>
+                      {rawAudioUrl ? (
+                        <a
+                          href={rawAudioUrl}
+                          download="raw-elevenlabs-audio.mp3"
+                          className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-bold text-white"
+                        >
+                          Download Raw Audio
+                        </a>
+                      ) : null}
+                    </div>
+                    {rawAudioUrl ? (
+                      <div className="space-y-4">
+                        <audio controls src={rawAudioUrl} className="w-full" />
+                        <button
+                          type="button"
+                          onClick={handleCleanGeneratedAudio}
+                          disabled={isGeneratingVoice || isCleaningGeneratedAudio}
+                          className="w-full rounded-2xl border border-cyan-200/40 bg-cyan-300/10 px-5 py-4 font-black text-cyan-50 transition hover:bg-cyan-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {isCleaningGeneratedAudio ? "Reducing silences..." : "Clean This Audio"}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">
+                        Generate audio with ElevenLabs to preview and download the raw MP3.
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="text-xl font-bold text-white">Cleaned Audio Output</h3>
+                        <p className="mt-1 text-sm text-slate-400">Cleaned Dynamic Audio</p>
+                      </div>
+                      {cleanedGeneratedAudioUrl ? (
+                        <a
+                          href={cleanedGeneratedAudioUrl}
+                          download="cleaned-dynamic-audio.mp3"
+                          className="rounded-full border border-white/10 bg-white/[0.08] px-4 py-2 text-sm font-bold text-white"
+                        >
+                          Download Cleaned Audio
+                        </a>
+                      ) : null}
+                    </div>
+                    {cleanedGeneratedAudioUrl ? (
+                      <audio controls src={cleanedGeneratedAudioUrl} className="w-full" />
+                    ) : (
+                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">
+                        Use Clean This Audio to reuse the Audio Pace Cleaner settings and create final dynamic audio.
+                      </div>
+                    )}
+                  </section>
+                </div>
+
                 <div className="grid gap-4 lg:grid-cols-2">
                   <TextResultCard title="Viral title" value={loreResult.title} />
                   <TextResultCard title="Short hook" value={loreResult.hook} />
-                  <TextResultCard title="Full narration script" value={loreResult.script} multiline />
                   <TextResultCard title="Voice-ready version" value={loreResult.voiceReadyScript} multiline />
                   <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
                   <VisualBeatsCard beats={loreResult.visualBeats} />
@@ -832,6 +1147,120 @@ function VisualBeatsCard({ beats }: { beats: LorePack["visualBeats"] }) {
           </div>
         ))}
       </div>
+    </article>
+  );
+}
+
+function TextInputField({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  type?: string;
+}) {
+  return (
+    <label className="block">
+      <span className="mb-2 block text-sm font-bold text-slate-200">{label}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
+      />
+    </label>
+  );
+}
+
+function DecimalSliderField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between gap-4">
+        <label className="text-sm font-bold text-slate-200">{label}</label>
+        <span className="rounded-full bg-white/[0.06] px-3 py-1 text-sm font-semibold text-violet-100">
+          {value.toFixed(2)}
+        </span>
+      </div>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full accent-violet-300"
+      />
+    </div>
+  );
+}
+
+function ToggleField({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!checked)}
+      className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-left"
+    >
+      <span className="text-sm font-bold text-slate-200">{label}</span>
+      <span className={`rounded-full px-3 py-1 text-xs font-black ${checked ? "bg-emerald-300/15 text-emerald-100" : "bg-white/[0.06] text-slate-400"}`}>
+        {checked ? "On" : "Off"}
+      </span>
+    </button>
+  );
+}
+
+function AudioOutputCard({
+  title,
+  url,
+  emptyText,
+  downloadName,
+}: {
+  title: string;
+  url: string;
+  emptyText: string;
+  downloadName: string;
+}) {
+  return (
+    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-bold text-white">{title}</h3>
+        {url ? (
+          <a
+            href={url}
+            download={downloadName}
+            className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-cyan-200/50 hover:text-white"
+          >
+            Download
+          </a>
+        ) : null}
+      </div>
+      {url ? (
+        <audio controls src={url} className="w-full" />
+      ) : (
+        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">{emptyText}</div>
+      )}
     </article>
   );
 }
