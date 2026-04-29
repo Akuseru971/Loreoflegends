@@ -141,8 +141,8 @@ JSON body:
 - `apiKey`: optional ElevenLabs API key override; defaults to `ELEVENLABS_API_KEY`
 - `voiceId`: optional ElevenLabs Voice ID override; defaults to `ELEVENLABS_VOICE_ID`
 - `text`: edited script text
-- `modelId`: `eleven_multilingual_v2`, `eleven_turbo_v2_5`, or
-  `eleven_flash_v2_5`
+- `modelId`: `eleven_multilingual_v2`, `eleven_turbo_v2_5`,
+  `eleven_flash_v2_5`, or `eleven_v3`
 - `stability`: number between `0` and `1`
 - `similarityBoost`: number between `0` and `1`
 - `style`: number between `0` and `1`

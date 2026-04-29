@@ -7,7 +7,7 @@ const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-sty
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
 const durations = ["1min15", "1min30", "1min40"] as const;
 const languages = ["English", "French", "Spanish"] as const;
-const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5"] as const;
+const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"] as const;
 
 type LoreContentType = (typeof loreContentTypeOptions)[number];
 type LoreTone = (typeof tones)[number];

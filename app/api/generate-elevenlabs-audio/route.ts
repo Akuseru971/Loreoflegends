@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const allowedModels = new Set(["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5"]);
+const allowedModels = new Set(["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"]);
 const MAX_TEXT_LENGTH = 5000;
 
 type ElevenLabsRequest = {
