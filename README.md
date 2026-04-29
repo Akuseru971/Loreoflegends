@@ -4,8 +4,9 @@ Audio Pace Cleaner is a Vercel-ready creator SaaS MVP with a two-step short-form
 workflow:
 
 1. Generate a League of Legends lore script pack.
-2. Edit the script and generate narration with ElevenLabs.
-3. Clean the generated or uploaded narration audio to tighten long silent gaps.
+2. Edit the script and verify it with the Lore Accuracy Guardrail.
+3. Generate narration with ElevenLabs.
+4. Clean the generated or uploaded narration audio to tighten long silent gaps.
 
 The app does not generate videos. It generates text-only lore script packs
 through the OpenAI API, can call ElevenLabs text-to-speech from a server route
@@ -19,6 +20,8 @@ with a user-supplied session key, then processes audio with FFmpeg.
   shorts
 - Server-side `POST /api/generate-lol-lore` route using `OPENAI_API_KEY`
 - Editable generated script textarea before voice generation
+- Server-side `POST /api/verify-lol-lore` guardrail that reviews the edited
+  script for invented, outdated, risky, or unsupported lore claims
 - Server-side `POST /api/generate-elevenlabs-audio` route using a pasted
   ElevenLabs API key for that request only
 - Raw ElevenLabs audio preview/download plus one-click cleanup through the
@@ -62,6 +65,23 @@ performs a quality check for structure, concrete facts, hook, final payoff, and
 generic filler, then regenerates once if the first result is weak. Word count is
 returned as metadata only and does not block the generated script from being
 shown.
+
+## Lore Accuracy Guardrail
+
+The guardrail checks the current editable script before voice generation. It is
+designed as a strict lore editor for current Riot/Runeterra canon and flags:
+
+- invented factions, names, motives, powers, or relationships
+- outdated League institution framing or removed canon
+- unsupported timelines, regions, political consequences, or fan theories
+- exaggerated claims presented as fact
+- uncertain claims that need safer wording
+
+It returns a verdict, accuracy score, correct facts, incorrect/non-canon claims,
+risky claims, a corrected voice-ready script, and a summary of changes. Applying
+the corrected version replaces the editable script, so ElevenLabs uses the safer
+version. AI verification helps reduce lore mistakes, but final creator review is
+recommended.
 
 ## Audio behavior
 
@@ -149,6 +169,18 @@ JSON body:
 - `mode`: `daily` or `custom`
 
 Returns a JSON production pack for short-form lore content.
+
+`POST /api/verify-lol-lore`
+
+JSON body:
+
+- `script`: current editable narration script
+- `topic`: related topic or generated title
+- `contentType`: `Lore Event`, `Champion Lore`, or `Lore Fun Fact`
+- `language`: `English`, `French`, or `Spanish`
+
+Returns a lore verification report with verdict, accuracy score, claim analysis,
+corrected script, and change summary.
 
 `POST /api/generate-elevenlabs-audio`
 

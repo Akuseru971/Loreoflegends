@@ -67,6 +67,28 @@ type LorePack = {
   qualityNote?: string;
 };
 
+type LoreVerification = {
+  verdict: "LEGIT" | "MOSTLY_LEGIT" | "NEEDS_FIXES" | "NOT_LEGIT";
+  accuracyScore: number;
+  shortSummary: string;
+  correctFacts: {
+    claim: string;
+    explanation: string;
+  }[];
+  incorrectOrNonCanonClaims: {
+    claim: string;
+    problem: string;
+    correction: string;
+  }[];
+  uncertainOrRiskyClaims: {
+    claim: string;
+    risk: string;
+    saferWording: string;
+  }[];
+  correctedScript: string;
+  summaryOfChanges: string[];
+};
+
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a"];
 const ACCEPTED_MIME_TYPES = [
@@ -225,6 +247,10 @@ export default function HomePage() {
   const [rawAudioBlob, setRawAudioBlob] = useState<Blob | null>(null);
   const [rawAudioUrl, setRawAudioUrl] = useState("");
   const [cleanedGeneratedAudioUrl, setCleanedGeneratedAudioUrl] = useState("");
+  const [guardrailResult, setGuardrailResult] = useState<LoreVerification | null>(null);
+  const [guardrailError, setGuardrailError] = useState("");
+  const [guardrailNotice, setGuardrailNotice] = useState("");
+  const [isVerifyingLore, setIsVerifyingLore] = useState(false);
 
   const selectedMode = modes[mode];
 
@@ -334,6 +360,9 @@ export default function HomePage() {
 
       setLoreResult(payload);
       setEditableScript(payload.script);
+      setGuardrailResult(null);
+      setGuardrailError("");
+      setGuardrailNotice("");
       setVoiceError("");
       setVoiceNotice("");
       if (rawAudioUrl) {
@@ -409,6 +438,72 @@ export default function HomePage() {
     } finally {
       setIsGeneratingVoice(false);
     }
+  }
+
+  async function handleVerifyLoreAccuracy() {
+    setGuardrailError("");
+    setGuardrailNotice("");
+
+    const script = editableScript.trim();
+    if (!script) {
+      setGuardrailError("Please write or generate a script before verifying lore accuracy.");
+      return;
+    }
+    if (script.length > 7000) {
+      setGuardrailError("Script is too long for lore verification. Keep it under 7,000 characters.");
+      return;
+    }
+
+    setIsVerifyingLore(true);
+
+    try {
+      const response = await fetch("/api/verify-lol-lore", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          script,
+          topic: loreTopic || loreResult?.title || "",
+          contentType: loreContentType,
+          language: loreLanguage,
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as (LoreVerification & { error?: string }) | null;
+
+      if (!response.ok || !payload) {
+        throw new Error(payload?.error ?? "Lore accuracy verification failed.");
+      }
+
+      setGuardrailResult(payload);
+      setGuardrailNotice("Lore accuracy analysis ready. Review the corrected version before generating audio.");
+    } catch (verificationError) {
+      setGuardrailError(verificationError instanceof Error ? verificationError.message : "Lore accuracy verification failed.");
+    } finally {
+      setIsVerifyingLore(false);
+    }
+  }
+
+  function handleApplyCorrectedScript() {
+    if (!guardrailResult?.correctedScript) {
+      setGuardrailError("No corrected script is available yet.");
+      return;
+    }
+
+    setEditableScript(guardrailResult.correctedScript);
+    setGuardrailError("");
+    setGuardrailNotice("Corrected lore version applied. You can now edit it or generate audio.");
+
+    if (rawAudioUrl) {
+      URL.revokeObjectURL(rawAudioUrl);
+      setRawAudioUrl("");
+    }
+    if (cleanedGeneratedAudioUrl) {
+      URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+      setCleanedGeneratedAudioUrl("");
+    }
+    setRawAudioBlob(null);
   }
 
   async function handleCleanGeneratedAudio() {
@@ -721,6 +816,16 @@ export default function HomePage() {
                     />
                     <p className="mt-2 text-xs text-slate-500">{editableScript.trim().length} characters</p>
                   </section>
+
+                  <LoreAccuracyGuardrailCard
+                    result={guardrailResult}
+                    error={guardrailError}
+                    notice={guardrailNotice}
+                    isVerifying={isVerifyingLore}
+                    isApplyingDisabled={!guardrailResult?.correctedScript}
+                    onVerify={handleVerifyLoreAccuracy}
+                    onApply={handleApplyCorrectedScript}
+                  />
 
                   <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
                     <div className="mb-4">
@@ -1156,6 +1261,136 @@ function CopyButton({ value }: { value: string }) {
     >
       {copied ? "Copied" : "Copy"}
     </button>
+  );
+}
+
+function LoreAccuracyGuardrailCard({
+  result,
+  error,
+  notice,
+  isVerifying,
+  isApplyingDisabled,
+  onVerify,
+  onApply,
+}: {
+  result: LoreVerification | null;
+  error: string;
+  notice: string;
+  isVerifying: boolean;
+  isApplyingDisabled: boolean;
+  onVerify: () => void;
+  onApply: () => void;
+}) {
+  const verdictStyles = {
+    LEGIT: "border-emerald-300/30 bg-emerald-400/10 text-emerald-100",
+    MOSTLY_LEGIT: "border-yellow-300/30 bg-yellow-400/10 text-yellow-100",
+    NEEDS_FIXES: "border-orange-300/30 bg-orange-400/10 text-orange-100",
+    NOT_LEGIT: "border-rose-300/30 bg-rose-400/10 text-rose-100",
+  };
+
+  return (
+    <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <div className="mb-4">
+        <p className="text-sm uppercase tracking-[0.24em] text-violet-200/70">Strict editor</p>
+        <h3 className="mt-1 text-xl font-bold text-white">Lore Accuracy Guardrail</h3>
+        <p className="mt-2 text-sm leading-6 text-slate-400">
+          Verify the script before generating audio. The guardrail checks for invented lore, outdated canon,
+          risky claims, and unsupported details.
+        </p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          AI verification helps reduce lore mistakes, but final creator review is recommended.
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={onVerify}
+          disabled={isVerifying}
+          className="rounded-2xl border border-violet-200/40 bg-violet-300/10 px-5 py-4 font-black text-violet-50 transition hover:bg-violet-300/15 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isVerifying ? "Verifying lore accuracy..." : "Verify Lore Accuracy"}
+        </button>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={isApplyingDisabled || isVerifying}
+          className="rounded-2xl bg-gradient-to-r from-emerald-300 to-cyan-300 px-5 py-4 font-black text-slate-950 transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
+        >
+          Apply Corrected Version
+        </button>
+      </div>
+
+      {(error || notice) ? (
+        <div
+          className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${
+            error ? "border-rose-300/20 bg-rose-400/10 text-rose-100" : "border-emerald-300/20 bg-emerald-400/10 text-emerald-100"
+          }`}
+        >
+          {error || notice}
+        </div>
+      ) : null}
+
+      {result ? (
+        <div className="mt-5 space-y-4">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className={`rounded-full border px-3 py-1 text-xs font-black ${verdictStyles[result.verdict]}`}>
+              {result.verdict.replace("_", " ")}
+            </span>
+            <span className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1 text-xs font-bold text-slate-200">
+              {result.accuracyScore}% accuracy
+            </span>
+          </div>
+          <p className="text-sm leading-6 text-slate-300">{result.shortSummary}</p>
+
+          <VerificationList
+            title="Correct facts"
+            items={result.correctFacts}
+            render={(item) => `${item.claim}: ${item.explanation}`}
+          />
+          <VerificationList
+            title="Incorrect / non-canon claims"
+            items={result.incorrectOrNonCanonClaims}
+            render={(item) => `${item.claim}: ${item.problem} Correction: ${item.correction}`}
+          />
+          <VerificationList
+            title="Uncertain or risky claims"
+            items={result.uncertainOrRiskyClaims}
+            render={(item) => `${item.claim}: ${item.risk} Safer: ${item.saferWording}`}
+          />
+          <VerificationList title="Summary of changes" items={result.summaryOfChanges} render={(item) => item} />
+
+          <details className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+            <summary className="cursor-pointer font-bold text-white">Corrected script preview</summary>
+            <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-300">{result.correctedScript}</p>
+          </details>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function VerificationList<T>({ title, items, render }: { title: string; items: T[]; render: (item: T) => string }) {
+  const value = items.map(render).join("\n");
+
+  return (
+    <details className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
+        <span>{title}</span>
+        <CopyButton value={value} />
+      </summary>
+      {items.length ? (
+        <ul className="mt-3 space-y-2">
+          {items.map((item, index) => (
+            <li key={`${title}-${index}`} className="rounded-xl bg-black/20 px-3 py-2 text-sm leading-6 text-slate-300">
+              {render(item)}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-3 text-sm text-slate-500">No items reported.</p>
+      )}
+    </details>
   );
 }
 
