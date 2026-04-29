@@ -9,6 +9,17 @@ const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-sty
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
 const durations = ["1min15", "1min30", "1min40"] as const;
 const languages = ["English", "French", "Spanish"] as const;
+const narrativeAngles = [
+  "Core tragedy",
+  "Cause and consequence",
+  "Character motivation",
+  "Region politics",
+  "Beginner explainer",
+  "Mythic horror",
+  "Moral ambiguity",
+] as const;
+const audienceLevels = ["New to lore", "Casual player", "Lore fan"] as const;
+const creatorGoals = ["Teach clearly", "Maximize retention", "Prepare voiceover", "Spark comments"] as const;
 
 const durationWordRanges = {
   "1min15": { min: 185, max: 210, label: "1 minute 15 seconds" },
@@ -38,6 +49,9 @@ type LoreRequest = {
   platform?: string;
   duration?: string;
   language?: string;
+  narrativeAngle?: string;
+  audienceLevel?: string;
+  creatorGoal?: string;
   mode?: string;
 };
 
@@ -51,6 +65,8 @@ type LorePack = {
     beat: string;
     visualSuggestion: string;
   }[];
+  hookVariants: string[];
+  alternateTitles: string[];
   retentionBreakdown: {
     moment: string;
     purpose: string;
@@ -106,6 +122,8 @@ function validateLorePack(value: unknown): LorePack | null {
     typeof pack.script !== "string" ||
     typeof pack.voiceReadyScript !== "string" ||
     !isStringArray(pack.captionVersion) ||
+    !isStringArray(pack.hookVariants) ||
+    !isStringArray(pack.alternateTitles) ||
     !Array.isArray(visualBeats) ||
     !Array.isArray(retentionBreakdown) ||
     !Array.isArray(loreAccuracyNotes) ||
@@ -195,6 +213,29 @@ function qualityIssues(pack: LorePack, range: { min: number; max: number }) {
   return issues;
 }
 
+function qualityReport(pack: LorePack, range: { min: number; max: number }) {
+  const wordCount = countWords(pack.script);
+  const issues = qualityIssues(pack, range);
+  const strengths = [
+    "Structured for short-form retention",
+    `${pack.loreAccuracyNotes.length} creator-side lore accuracy notes`,
+    `${pack.retentionBreakdown.length} retention moments mapped`,
+  ];
+
+  if (wordCount >= range.min && wordCount <= range.max) {
+    strengths.push("Within requested duration target");
+  }
+
+  return {
+    score: Math.max(0, 100 - issues.length * 15),
+    passed: issues.length === 0,
+    wordCount,
+    targetWordRange: `${range.min}-${range.max}`,
+    strengths,
+    warnings: issues,
+  };
+}
+
 function buildPrompt({
   contentType,
   topic,
@@ -202,6 +243,9 @@ function buildPrompt({
   platform,
   duration,
   language,
+  narrativeAngle,
+  audienceLevel,
+  creatorGoal,
   retryInstruction,
 }: {
   contentType: string;
@@ -210,6 +254,9 @@ function buildPrompt({
   platform: string;
   duration: keyof typeof durationWordRanges;
   language: string;
+  narrativeAngle: string;
+  audienceLevel: string;
+  creatorGoal: string;
   retryInstruction?: string;
 }) {
   const range = durationWordRanges[duration];
@@ -225,6 +272,8 @@ JSON schema:
   "script": string,
   "voiceReadyScript": string,
   "captionVersion": string[],
+  "hookVariants": string[],
+  "alternateTitles": string[],
   "visualBeats": [{ "beat": string, "visualSuggestion": string }],
   "retentionBreakdown": [
     { "moment": string, "purpose": string, "text": string }
@@ -246,6 +295,28 @@ Inputs:
 - Platform: ${platform}
 - Duration target: ${range.label}
 - Language: ${language}
+- Narrative angle: ${narrativeAngle}
+- Audience level: ${audienceLevel}
+- Creator goal: ${creatorGoal}
+
+ANGLE AND AUDIENCE DIRECTION:
+- Narrative angle controls what the script should prioritize:
+  Core tragedy = emotional wound and consequence.
+  Cause and consequence = clear chain of events.
+  Character motivation = why a character acts the way they do.
+  Region politics = factions, power, conflict, and stakes.
+  Beginner explainer = maximum clarity for new viewers.
+  Mythic horror = cosmic dread through confirmed facts only.
+  Moral ambiguity = why the topic is hard to judge.
+- Audience level controls assumed knowledge:
+  New to lore = explain every proper noun quickly.
+  Casual player = connect lore to champions/regions viewers may recognize.
+  Lore fan = allow more specificity, but still keep it clear.
+- Creator goal controls optimization:
+  Teach clearly = prioritize explanation.
+  Maximize retention = prioritize hooks, reversals, and escalating reveals.
+  Prepare voiceover = prioritize clean spoken rhythm.
+  Spark comments = prioritize a nuanced final question and debate angle.
 
 CORE GOAL:
 The video must instruct, not just entertain. The viewer should finish thinking:
@@ -259,6 +330,15 @@ SCRIPT STYLE:
 - Use short, punchy spoken sentences with natural ElevenLabs rhythm.
 - Be social-media native: strong first 3 seconds, no dead time, no academic phrasing.
 - Be dramatic only through confirmed facts, consequences, motivations, and reversals.
+- Adapt depth for audience level:
+  - New to lore: explain terms and stakes simply.
+  - Casual player: connect lore to recognizable champions, regions, and conflicts.
+  - Lore fan: include sharper cause/effect and less obvious implications.
+- Prioritize the creator goal:
+  - Teach clearly: maximize clarity and concrete facts.
+  - Maximize retention: sharpen hook, reversals, and payoff.
+  - Prepare voiceover: simplify sentence rhythm and pronunciation.
+  - Spark comments: make the final question more debatable without rage-bait.
 
 CANON ACCURACY RULES:
 - Use only confirmed official League of Legends / Runeterra lore.
@@ -308,6 +388,7 @@ CONTENT DEPTH RULES:
 - Include cause-and-effect explanation.
 - Explain why the event, champion, faction, or detail matters.
 - Make the viewer understand something precise by the end.
+- Use the narrative angle "${narrativeAngle}" as the main lens. Do not try to cover everything.
 - If the topic is broad, focus on one precise angle instead of summarizing everything.
 - If the topic is a champion, do not summarize their whole biography. Explain the core tragedy,
   conflict, transformation, belief, or consequence that defines them.
@@ -342,6 +423,8 @@ Output field guidance:
 - script: polished narration only.
 - voiceReadyScript: same content optimized for spoken delivery with clean paragraph breaks and no production labels.
 - captionVersion: 4-7 short caption lines suitable for on-screen text.
+- hookVariants: 3 alternate first-sentence hooks with different angles, all accurate.
+- alternateTitles: 3 alternate social-native titles, all accurate and non-clickbait.
 - visualBeats: 6-9 concise beat objects with non-video-generation visual direction ideas.
 - retentionBreakdown: exactly 4 objects for:
   1. Opening hook - why this makes viewers stop scrolling - exact hook sentence.
@@ -406,6 +489,9 @@ export async function POST(request: NextRequest) {
   const platform = normalizeOption(payload.platform, platforms, "TikTok");
   const duration = normalizeOption(payload.duration, durations, "1min30") as keyof typeof durationWordRanges;
   const language = normalizeOption(payload.language, languages, "English");
+  const narrativeAngle = normalizeOption(payload.narrativeAngle, narrativeAngles, "Cause and consequence");
+  const audienceLevel = normalizeOption(payload.audienceLevel, audienceLevels, "Casual player");
+  const creatorGoal = normalizeOption(payload.creatorGoal, creatorGoals, "Teach clearly");
 
   if (mode === "custom" && !topic) {
     return jsonError("Enter a League of Legends lore topic before generating.");
@@ -425,7 +511,18 @@ export async function POST(request: NextRequest) {
         attempt === 1 && fallbackPack
           ? `Regenerate once. Fix these quality issues from the previous attempt: ${qualityIssues(fallbackPack, durationWordRanges[duration]).join(" ")}`
           : undefined;
-      const prompt = buildPrompt({ contentType, topic, tone, platform, duration, language, retryInstruction });
+      const prompt = buildPrompt({
+        contentType,
+        topic,
+        tone,
+        platform,
+        duration,
+        language,
+        narrativeAngle,
+        audienceLevel,
+        creatorGoal,
+        retryInstruction,
+      });
       const rawPack = await generatePack(openai, prompt);
       const pack = validateLorePack(rawPack);
 
@@ -440,7 +537,16 @@ export async function POST(request: NextRequest) {
       const issues = qualityIssues(pack, durationWordRanges[duration]);
 
       if (issues.length === 0) {
-        return NextResponse.json({ ...pack, selectedTopic: topic, selectedContentType: contentType, wordCount });
+        return NextResponse.json({
+          ...pack,
+          selectedTopic: topic,
+          selectedContentType: contentType,
+          selectedNarrativeAngle: narrativeAngle,
+          selectedAudienceLevel: audienceLevel,
+          selectedCreatorGoal: creatorGoal,
+          wordCount,
+          qualityReport: qualityReport(pack, durationWordRanges[duration]),
+        });
       }
 
       fallbackPack = { ...pack, wordCount };
@@ -451,6 +557,10 @@ export async function POST(request: NextRequest) {
         ...fallbackPack,
         selectedTopic: topic,
         selectedContentType: contentType,
+        selectedNarrativeAngle: narrativeAngle,
+        selectedAudienceLevel: audienceLevel,
+        selectedCreatorGoal: creatorGoal,
+        qualityReport: qualityReport(fallbackPack, durationWordRanges[duration]),
         qualityNote: "Returned after one regeneration attempt. Review the retention and accuracy notes before recording.",
       });
     }

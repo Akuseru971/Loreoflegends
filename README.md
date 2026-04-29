@@ -41,22 +41,27 @@ The generator creates production-ready League of Legends lore packs with:
 - Full narration script
 - ElevenLabs-ready voice script
 - Caption-friendly lines
+- Hook variants
+- Alternate titles
 - Suggested visual beats
 - Retention breakdown
 - Lore accuracy notes for creator-side validation
+- Quality report with score, strengths, and warnings
 - TikTok description
 - Instagram caption
 - YouTube Shorts title
 - Hashtags
 - Pinned comment question
 
-The backend prompt emphasizes official Riot canon accuracy, no invented lore,
-educational cause-and-effect explanations, concrete lore facts, strong
-short-form retention, natural narration, and target durations between 1min15 and
-1min40. The API performs a quality check for structure, concrete facts, hook,
-final payoff, and generic filler, then regenerates once if the first result is
-weak. Word count is returned as metadata only and does not block the generated
-script from being shown.
+The UI includes smart controls for narrative angle, audience level, and creator
+goal so each script can focus on a precise educational purpose. The backend
+prompt emphasizes official Riot canon accuracy, no invented lore, educational
+cause-and-effect explanations, concrete lore facts, strong short-form retention,
+natural narration, and target durations between 1min15 and 1min40. The API
+performs a quality check for structure, concrete facts, hook, final payoff, and
+generic filler, then regenerates once if the first result is weak. Word count is
+returned as metadata only and does not block the generated script from being
+shown.
 
 ## Audio behavior
 
@@ -135,6 +140,12 @@ JSON body:
 - `platform`: `TikTok`, `YouTube Shorts`, `Instagram Reels`, or `Podcast Short`
 - `duration`: `1min15`, `1min30`, or `1min40`
 - `language`: `English`, `French`, or `Spanish`
+- `narrativeAngle`: optional focus such as `Cause and consequence`,
+  `Core tragedy`, or `Moral ambiguity`
+- `audienceLevel`: optional audience targeting such as `New to lore`,
+  `Casual player`, or `Lore fan`
+- `creatorGoal`: optional output goal such as `Teach clearly`,
+  `Maximize retention`, `Prepare voiceover`, or `Spark comments`
 - `mode`: `daily` or `custom`
 
 Returns a JSON production pack for short-form lore content.

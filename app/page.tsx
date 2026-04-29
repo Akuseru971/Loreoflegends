@@ -7,6 +7,17 @@ const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-sty
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
 const durations = ["1min15", "1min30", "1min40"] as const;
 const languages = ["English", "French", "Spanish"] as const;
+const narrativeAngles = [
+  "Core tragedy",
+  "Cause and consequence",
+  "Character motivation",
+  "Region politics",
+  "Beginner explainer",
+  "Mythic horror",
+  "Moral ambiguity",
+] as const;
+const audienceLevels = ["New to lore", "Casual player", "Lore fan"] as const;
+const creatorGoals = ["Teach clearly", "Maximize retention", "Prepare voiceover", "Spark comments"] as const;
 const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"] as const;
 
 type LoreContentType = (typeof loreContentTypeOptions)[number];
@@ -14,6 +25,9 @@ type LoreTone = (typeof tones)[number];
 type LorePlatform = (typeof platforms)[number];
 type LoreDuration = (typeof durations)[number];
 type LoreLanguage = (typeof languages)[number];
+type NarrativeAngle = (typeof narrativeAngles)[number];
+type AudienceLevel = (typeof audienceLevels)[number];
+type CreatorGoal = (typeof creatorGoals)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
 
 type LorePack = {
@@ -22,6 +36,8 @@ type LorePack = {
   script: string;
   voiceReadyScript: string;
   captionVersion: string[];
+  hookVariants: string[];
+  alternateTitles: string[];
   visualBeats: {
     beat: string;
     visualSuggestion: string;
@@ -40,6 +56,15 @@ type LorePack = {
   youtubeShortsTitle: string;
   hashtags: string[];
   pinnedComment: string;
+  qualityReport?: {
+    score: number;
+    passed: boolean;
+    wordCount: number;
+    targetWordRange: string;
+    strengths: string[];
+    warnings: string[];
+  };
+  qualityNote?: string;
 };
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -179,6 +204,9 @@ export default function HomePage() {
   const [lorePlatform, setLorePlatform] = useState<LorePlatform>("TikTok");
   const [loreDuration, setLoreDuration] = useState<LoreDuration>("1min30");
   const [loreLanguage, setLoreLanguage] = useState<LoreLanguage>("English");
+  const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Cause and consequence");
+  const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("Casual player");
+  const [creatorGoal, setCreatorGoal] = useState<CreatorGoal>("Teach clearly");
   const [loreResult, setLoreResult] = useState<LorePack | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
@@ -291,6 +319,9 @@ export default function HomePage() {
           platform: lorePlatform,
           duration: loreDuration,
           language: loreLanguage,
+          narrativeAngle,
+          audienceLevel,
+          creatorGoal,
           mode: generationMode,
         }),
       });
@@ -580,8 +611,26 @@ export default function HomePage() {
                     onChange={(value) => setLoreLanguage(value as LoreLanguage)}
                     options={languages}
                   />
+                  <SelectField
+                    label="Narrative angle"
+                    value={narrativeAngle}
+                    onChange={(value) => setNarrativeAngle(value as NarrativeAngle)}
+                    options={narrativeAngles}
+                  />
+                  <SelectField
+                    label="Audience"
+                    value={audienceLevel}
+                    onChange={(value) => setAudienceLevel(value as AudienceLevel)}
+                    options={audienceLevels}
+                  />
+                  <SelectField
+                    label="Creator goal"
+                    value={creatorGoal}
+                    onChange={(value) => setCreatorGoal(value as CreatorGoal)}
+                    options={creatorGoals}
+                  />
                   <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-sm leading-6 text-cyan-50/85">
-                    Default: English, TikTok, Mysterious, 1min30.
+                    Smart defaults: English, TikTok, Mysterious, 1min30, cause-and-effect.
                   </div>
                 </div>
 
@@ -809,6 +858,9 @@ export default function HomePage() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
+                  <QualityReportCard report={loreResult.qualityReport} qualityNote={loreResult.qualityNote} />
+                  <ListResultCard title="Hook variants" items={loreResult.hookVariants} />
+                  <ListResultCard title="Alternate titles" items={loreResult.alternateTitles} />
                   <TextResultCard title="Viral title" value={loreResult.title} />
                   <TextResultCard title="Short hook" value={loreResult.hook} />
                   <TextResultCard title="Voice-ready version" value={loreResult.voiceReadyScript} multiline />
@@ -1312,6 +1364,52 @@ function LoreAccuracyNotesCard({ items }: { items: LorePack["loreAccuracyNotes"]
             <p className="mt-1 text-sm leading-6 text-slate-300">{item.whyItMatters}</p>
           </div>
         ))}
+      </div>
+    </details>
+  );
+}
+
+function QualityReportCard({
+  report,
+  qualityNote,
+}: {
+  report?: NonNullable<LorePack["qualityReport"]>;
+  qualityNote?: string;
+}) {
+  if (!report) {
+    return null;
+  }
+
+  const statusColor = report.passed ? "text-emerald-100" : "text-amber-100";
+
+  return (
+    <details open className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
+        <span>Quality Report</span>
+        <span className={`rounded-full bg-white/[0.06] px-3 py-1 text-sm ${statusColor}`}>
+          {report.score}/100
+        </span>
+      </summary>
+      <div className="mt-4 space-y-4 text-sm">
+        {qualityNote ? (
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-amber-100">
+            {qualityNote}
+          </div>
+        ) : null}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="rounded-2xl bg-white/[0.035] p-3">
+            <p className="font-bold text-cyan-100">Word count</p>
+            <p className="mt-1 text-slate-300">
+              {report.wordCount} words / target {report.targetWordRange}
+            </p>
+          </div>
+          <div className="rounded-2xl bg-white/[0.035] p-3">
+            <p className="font-bold text-cyan-100">Status</p>
+            <p className="mt-1 text-slate-300">{report.passed ? "Ready to record" : "Review suggested"}</p>
+          </div>
+        </div>
+        <ListResultCard title="Quality strengths" items={report.strengths} />
+        {report.warnings.length > 0 ? <ListResultCard title="Quality warnings" items={report.warnings} /> : null}
       </div>
     </details>
   );
