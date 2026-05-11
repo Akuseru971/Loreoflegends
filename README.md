@@ -3,24 +3,24 @@
 Audio Pace Cleaner is a Vercel-ready creator SaaS MVP with a two-step short-form
 workflow:
 
-1. Generate a League of Legends lore script pack that is automatically checked and corrected for lore accuracy.
-2. Edit the final cleaned script and generate narration with ElevenLabs.
+1. Analyze a League of Legends champion interaction, voice line, or relationship with strict canon attribution.
+2. Edit the final cleaned explanation script and generate narration with ElevenLabs.
 3. Clean the generated or uploaded narration audio to tighten long silent gaps.
 
-The app does not generate videos. It generates text-only lore script packs
-through the OpenAI API, can call ElevenLabs text-to-speech from a server route
+The app does not generate videos. It generates text-only champion interaction
+explanations through the OpenAI API, can call ElevenLabs text-to-speech from a server route
 with a user-supplied session key, then processes audio with FFmpeg.
 
 ## Features
 
 - Next.js App Router and TypeScript
 - Premium dark, mobile-responsive upload UI
-- League of Legends lore script generator for TikTok, Shorts, Reels, and podcast
-  shorts
+- League of Legends interaction explainer for voice lines, champion relationships,
+  dialogue subtext, rivalries, family ties, conflicts, and trauma
 - Server-side `POST /api/generate-lol-lore` route using `OPENAI_API_KEY`
 - Editable generated script textarea before voice generation
 - Built-in lore accuracy guardrail inside `POST /api/generate-lol-lore` that
-  rewrites risky drafts before the final script reaches the UI
+  checks quote attribution and rewrites risky drafts before the final script reaches the UI
 - Server-side `POST /api/generate-elevenlabs-audio` route using a pasted
   ElevenLabs API key for that request only
 - Raw ElevenLabs audio preview/download plus one-click cleanup through the
@@ -34,12 +34,16 @@ with a user-supplied session key, then processes audio with FFmpeg.
 - No database, login, Stripe, video rendering, image generation, or automatic
   posting
 
-## Lore script generator
+## LoL interaction explainer
 
-The generator creates production-ready League of Legends lore packs with:
+The generator creates production-ready League of Legends interaction packs with:
 
 - Viral title
 - Short hook
+- Exact interaction attribution: speaker, quote, target, source type, canon status
+- Canon context
+- What the interaction reveals
+- Important canon limit / what is not confirmed
 - Full narration script
 - ElevenLabs-ready voice script
 - Caption-friendly lines
@@ -55,24 +59,20 @@ The generator creates production-ready League of Legends lore packs with:
 - Hashtags
 - Pinned comment question
 
-The UI includes smart controls for narrative angle, audience level, and creator
-goal so each script can focus on a precise educational purpose. The backend
-prompt emphasizes official Riot canon accuracy, no invented lore, educational
-cause-and-effect explanations, concrete lore facts, strong short-form retention,
-natural narration, and target durations between 1min15 and 1min40. The API
-performs a quality check for structure, concrete facts, hook, final payoff, and
-generic filler, then regenerates once if the first result is weak. Word count is
-returned as metadata only and does not block the generated script from being
-shown.
+The UI includes fields for an exact quote, speaker champion, target champion, and
+source type. The backend prompt emphasizes official Riot canon accuracy, exact
+speaker attribution, no invented dialogue, no fake interactions, and clear
+separation between confirmed, implied, and unconfirmed details. If the quote or
+target cannot be verified, the final result must say so instead of pretending.
 
 ## Built-in lore accuracy guardrail
 
-Before the app returns a generated lore pack, the backend runs an internal strict
-lore accuracy pass. That pass checks for invented factions, outdated League
-institution framing, unsupported relationships, risky timelines, fan theories,
-and exaggerated claims presented as fact. If needed, it rewrites the draft into a
-safer version while preserving the same topic, language, short-form pacing, and
-voice-ready structure.
+Before the app returns an interaction pack, the backend runs an internal strict
+lore accuracy pass. That pass checks for invented quotes, wrong speakers,
+unsupported targets, skin/legacy sources, outdated League institution framing,
+fan theories, and exaggerated claims presented as fact. If needed, it rewrites
+the draft into a safer version while preserving the same topic, language,
+short-form pacing, and voice-ready structure.
 
 The UI only receives the final cleaned script. ElevenLabs therefore uses the
 current final edited script, not an unverified draft.
@@ -147,12 +147,19 @@ By default the app uses the bundled `ffmpeg-static` binary.
 
 JSON body:
 
-- `contentType`: `Lore Event`, `Champion Lore`, or `Lore Fun Fact`
-- `topic`: custom topic for `mode: "custom"`
-- `tone`: `Mysterious`, `Epic`, `Dark`, `Tragic`, `Cinematic`, or
-  `Kindred-style`
+- `contentType`: `Voice Line`, `Champion Relationship`, `Dialogue Subtext`, or
+  `Conflict Explanation`
+- `topic`: interaction or relationship to explain for `mode: "custom"`
+- `quote`: exact quote if available
+- `speaker`: champion who says the line, if known
+- `target`: target champion, if known
+- `sourceType`: source label such as `Base champion voice line`, `Skin voice line`,
+  `Legends of Runeterra`, `Wild Rift`, `Cinematic`, `Riot Universe story`,
+  `Old / legacy lore`, or `Unknown / Let AI assess`
+- `tone`: `Mysterious`, `Cinematic`, `Serious`, `Dark`, `Tragic`, or
+  `Analytical`
 - `platform`: `TikTok`, `YouTube Shorts`, `Instagram Reels`, or `Podcast Short`
-- `duration`: `1min15`, `1min30`, or `1min40`
+- `duration`: `45s` or `60s`
 - `language`: `English`, `French`, or `Spanish`
 - `narrativeAngle`: optional focus such as `Cause and consequence`,
   `Core tragedy`, or `Moral ambiguity`

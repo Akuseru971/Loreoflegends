@@ -2,20 +2,21 @@
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-const loreContentTypeOptions = ["Lore Event", "Champion Lore", "Lore Fun Fact"] as const;
-const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-style"] as const;
+const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
+const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
-const durations = ["1min15", "1min30", "1min40"] as const;
+const durations = ["45s", "60s"] as const;
 const languages = ["English", "French", "Spanish"] as const;
 const narrativeAngles = [
-  "Core tragedy",
-  "Cause and consequence",
-  "Character motivation",
-  "Region politics",
-  "Beginner explainer",
-  "Mythic horror",
-  "Moral ambiguity",
+  "Relationship",
+  "Conflict",
+  "Trauma",
+  "Ideology",
+  "Family tie",
+  "Rivalry",
+  "Hidden subtext",
 ] as const;
+const sourceTypes = ["Unknown / Let AI assess", "Base champion voice line", "Skin voice line", "Legends of Runeterra", "Wild Rift", "Cinematic", "Riot Universe story", "Old / legacy lore"] as const;
 const audienceLevels = ["New to lore", "Casual player", "Lore fan"] as const;
 const creatorGoals = ["Teach clearly", "Maximize retention", "Prepare voiceover", "Spark comments"] as const;
 const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"] as const;
@@ -28,11 +29,23 @@ type LoreLanguage = (typeof languages)[number];
 type NarrativeAngle = (typeof narrativeAngles)[number];
 type AudienceLevel = (typeof audienceLevels)[number];
 type CreatorGoal = (typeof creatorGoals)[number];
+type SourceType = (typeof sourceTypes)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
 
 type LorePack = {
   title: string;
   hook: string;
+  interaction: {
+    speaker: string;
+    quote: string;
+    target: string;
+    sourceType: string;
+    canonStatus: "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN";
+  };
+  canonContext: string;
+  whatItReveals: string;
+  importantCanonLimit: string;
+  tiktokScript: string;
   script: string;
   voiceReadyScript: string;
   captionVersion: string[];
@@ -153,8 +166,23 @@ function scriptAsText(pack: LorePack) {
     "",
     `Short hook: ${pack.hook}`,
     "",
+    "Interaction:",
+    `${pack.interaction.speaker} says: "${pack.interaction.quote}"`,
+    `To: ${pack.interaction.target}`,
+    `Source: ${pack.interaction.sourceType}`,
+    `Canon status: ${pack.interaction.canonStatus}`,
+    "",
+    "Canon Context:",
+    pack.canonContext,
+    "",
+    "What It Reveals:",
+    pack.whatItReveals,
+    "",
+    "Important Canon Limit:",
+    pack.importantCanonLimit,
+    "",
     "Full narration script:",
-    pack.script,
+    pack.tiktokScript,
     "",
     "Voice-ready version:",
     pack.voiceReadyScript,
@@ -203,8 +231,8 @@ function progressForState({
 }): ProgressState | null {
   if (isLoreGenerating) {
     return {
-      label: "Generating final lore script",
-      detail: "Building the script, checking risky claims, and returning the canon-safe final version.",
+      label: "Analyzing champion interaction",
+      detail: "Checking quote attribution, canon context, risky claims, and returning the final voice-ready explanation.",
       percent: 44,
       steps: ["Draft script", "Lore accuracy pass", "Final rewrite"],
     };
@@ -255,13 +283,17 @@ export default function HomePage() {
   const [notice, setNotice] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [loreContentType, setLoreContentType] = useState<LoreContentType>("Lore Event");
+  const [loreContentType, setLoreContentType] = useState<LoreContentType>("Voice Line");
   const [loreTopic, setLoreTopic] = useState("");
+  const [interactionQuote, setInteractionQuote] = useState("");
+  const [speakerChampion, setSpeakerChampion] = useState("");
+  const [targetChampion, setTargetChampion] = useState("");
+  const [sourceType, setSourceType] = useState<SourceType>("Unknown / Let AI assess");
   const [loreTone, setLoreTone] = useState<LoreTone>("Mysterious");
   const [lorePlatform, setLorePlatform] = useState<LorePlatform>("TikTok");
-  const [loreDuration, setLoreDuration] = useState<LoreDuration>("1min30");
+  const [loreDuration, setLoreDuration] = useState<LoreDuration>("60s");
   const [loreLanguage, setLoreLanguage] = useState<LoreLanguage>("English");
-  const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Cause and consequence");
+  const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Relationship");
   const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("Casual player");
   const [creatorGoal, setCreatorGoal] = useState<CreatorGoal>("Teach clearly");
   const [loreResult, setLoreResult] = useState<LorePack | null>(null);
@@ -361,8 +393,8 @@ export default function HomePage() {
     event.preventDefault();
     setLoreError("");
 
-    if (generationMode === "custom" && !loreTopic.trim()) {
-      setLoreError("Enter a League of Legends lore topic before generating.");
+    if (generationMode === "custom" && !loreTopic.trim() && !interactionQuote.trim()) {
+      setLoreError("Enter an interaction, quote, or champion relationship before generating.");
       return;
     }
 
@@ -377,6 +409,10 @@ export default function HomePage() {
         body: JSON.stringify({
           contentType: loreContentType,
           topic: loreTopic,
+          quote: interactionQuote,
+          speaker: speakerChampion,
+          target: targetChampion,
+          sourceType,
           tone: loreTone,
           platform: lorePlatform,
           duration: loreDuration,
@@ -615,25 +651,25 @@ export default function HomePage() {
             <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
               <div className="space-y-6">
                 <div className="inline-flex rounded-full border border-violet-300/20 bg-violet-300/10 px-4 py-2 text-sm font-medium text-violet-100">
-                  Step 1 - League of Legends lore script pack
+                  Step 1 - League of Legends interaction explainer
                 </div>
                 <div>
                   <h1 className="max-w-4xl text-4xl font-black tracking-tight text-white sm:text-5xl lg:text-6xl">
-                    LoL Lore Content Generator
+                    LoL Interaction Explainer
                   </h1>
                   <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">
-                    Generate accurate, cinematic League of Legends lore scripts for TikTok, Shorts, Reels, and podcast-style narration.
+                    Explain League of Legends champion interactions, voice lines, rivalries, family ties, and dialogue subtext with strict canon attribution.
                   </p>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                    Built for a daily workflow: create a voice-ready lore pack, send the narration to ElevenLabs, then clean the exported audio below.
+                    Built for a daily workflow: analyze the interaction, get a canon-safe TikTok script, send it to ElevenLabs, then clean the exported audio below.
                   </p>
                 </div>
 
                 <div className="grid gap-3 sm:grid-cols-3">
                   {[
-                    ["Canon-first", "Prompted to avoid fake lore and headcanon."],
-                    ["Retention-ready", "Hooks, twists, climax, and final line."],
-                    ["Voice-ready", "Natural narration for ElevenLabs delivery."],
+                    ["Exact attribution", "Speaker, target, quote, and source are always separated."],
+                    ["Canon-only", "Unverified interactions are marked instead of invented."],
+                    ["Voice-ready", "45-60 second narration ready for ElevenLabs."],
                   ].map(([title, description]) => (
                     <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
                       <h3 className="font-bold text-white">{title}</h3>
@@ -676,7 +712,7 @@ export default function HomePage() {
                     options={languages}
                   />
                   <SelectField
-                    label="Narrative angle"
+                    label="Interaction angle"
                     value={narrativeAngle}
                     onChange={(value) => setNarrativeAngle(value as NarrativeAngle)}
                     options={narrativeAngles}
@@ -694,19 +730,57 @@ export default function HomePage() {
                     options={creatorGoals}
                   />
                   <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-sm leading-6 text-cyan-50/85">
-                    Smart defaults: English, TikTok, Mysterious, 1min30, cause-and-effect.
+                    Smart defaults: English, TikTok, mysterious, 60s, relationship-focused.
                   </div>
                 </div>
 
                 <label className="mt-4 block">
-                  <span className="mb-2 block text-sm font-bold text-slate-200">Topic</span>
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Interaction or relationship to explain</span>
                   <input
                     value={loreTopic}
                     onChange={(event) => setLoreTopic(event.target.value)}
-                    placeholder='Example: "The fall of Icathia", "Aatrox", "The Watchers"'
+                    placeholder='Example: "Aatrox line to Pantheon", "Yasuo and Yone", "Vayne and Evelynn"'
                     className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
                   />
                 </label>
+
+                <label className="mt-4 block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Exact quote, if you have it</span>
+                  <textarea
+                    value={interactionQuote}
+                    onChange={(event) => setInteractionQuote(event.target.value)}
+                    rows={3}
+                    placeholder='Paste the exact voice line here. The system will not invent a quote if this is empty.'
+                    className="w-full resize-y rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
+                  />
+                </label>
+
+                <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-bold text-slate-200">Speaker</span>
+                    <input
+                      value={speakerChampion}
+                      onChange={(event) => setSpeakerChampion(event.target.value)}
+                      placeholder="Aatrox, Swain, Vayne..."
+                      className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="mb-2 block text-sm font-bold text-slate-200">Target</span>
+                    <input
+                      value={targetChampion}
+                      onChange={(event) => setTargetChampion(event.target.value)}
+                      placeholder="Target champion if known"
+                      className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
+                    />
+                  </label>
+                  <SelectField
+                    label="Source"
+                    value={sourceType}
+                    onChange={(value) => setSourceType(value as SourceType)}
+                    options={sourceTypes}
+                  />
+                </div>
 
                 {loreError ? (
                   <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
@@ -721,14 +795,14 @@ export default function HomePage() {
                     disabled={isLoreGenerating}
                     className="rounded-2xl border border-violet-200/40 bg-violet-300/10 px-5 py-4 font-black text-violet-50 transition hover:bg-violet-300/15 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {isLoreGenerating ? "Generating..." : "Generate Today's Lore Script"}
+                    {isLoreGenerating ? "Generating..." : "Analyze Today's Interaction"}
                   </button>
                   <button
                     type="submit"
                     disabled={isLoreGenerating}
                     className="rounded-2xl bg-gradient-to-r from-violet-300 via-cyan-300 to-fuchsia-300 px-5 py-4 font-black text-slate-950 shadow-[0_18px_70px_rgba(168,85,247,0.22)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
                   >
-                    {isLoreGenerating ? "Generating..." : "Generate From My Topic"}
+                    {isLoreGenerating ? "Generating..." : "Analyze This Interaction"}
                   </button>
                 </div>
               </form>
@@ -740,6 +814,9 @@ export default function HomePage() {
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-100/70">Production pack ready</p>
                     <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.title}</h2>
+                    <p className="mt-2 text-sm text-emerald-100/75">
+                      Final interaction explainer generated with internal canon guardrails.
+                    </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
                     <button
@@ -784,6 +861,21 @@ export default function HomePage() {
                       className="w-full resize-y rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-7 text-slate-100 outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
                     />
                     <p className="mt-2 text-xs text-slate-500">{editableScript.trim().length} characters</p>
+                  </section>
+
+                  <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
+                    <div className="mb-4">
+                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction</p>
+                      <h3 className="mt-1 text-xl font-bold text-white">{loreResult.interaction.speaker} says</h3>
+                    </div>
+                    <blockquote className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-lg font-semibold leading-8 text-cyan-50">
+                      &ldquo;{loreResult.interaction.quote}&rdquo;
+                    </blockquote>
+                    <div className="mt-4 grid gap-3 text-sm text-slate-300">
+                      <p><span className="font-bold text-white">To:</span> {loreResult.interaction.target}</p>
+                      <p><span className="font-bold text-white">Source:</span> {loreResult.interaction.sourceType}</p>
+                      <p><span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus}</p>
+                    </div>
                   </section>
 
                   <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
@@ -923,11 +1015,14 @@ export default function HomePage() {
 
                 <div className="grid gap-4 lg:grid-cols-2">
                   <QualityReportCard report={loreResult.qualityReport} qualityNote={loreResult.qualityNote} />
-                  <ListResultCard title="Hook variants" items={loreResult.hookVariants} />
-                  <ListResultCard title="Alternate titles" items={loreResult.alternateTitles} />
                   <TextResultCard title="Viral title" value={loreResult.title} />
                   <TextResultCard title="Short hook" value={loreResult.hook} />
-                  <TextResultCard title="Voice-ready version" value={loreResult.voiceReadyScript} multiline />
+                  <TextResultCard title="Canon Context" value={loreResult.canonContext} multiline />
+                  <TextResultCard title="What It Reveals" value={loreResult.whatItReveals} multiline />
+                  <TextResultCard title="Important Canon Limit" value={loreResult.importantCanonLimit} multiline />
+                  <TextResultCard title="TikTok Script 45-60s" value={loreResult.tiktokScript} multiline />
+                  <ListResultCard title="Hook variants" items={loreResult.hookVariants} />
+                  <ListResultCard title="Alternate titles" items={loreResult.alternateTitles} />
                   <RetentionBreakdownCard items={loreResult.retentionBreakdown} />
                   <LoreAccuracyNotesCard items={loreResult.loreAccuracyNotes} />
                   <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
@@ -941,7 +1036,7 @@ export default function HomePage() {
               </div>
             ) : (
               <div className="mt-8 rounded-3xl border border-white/10 bg-white/[0.035] p-5 text-sm leading-6 text-slate-400">
-                Your generated lore pack will appear here with copy buttons for every block and downloads for script and JSON production files.
+                Your canon-safe interaction explanation will appear here with copy buttons, exact attribution, and a voice-ready short-form script.
               </div>
             )}
           </div>

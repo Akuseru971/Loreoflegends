@@ -3,47 +3,41 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const contentTypes = ["Lore Event", "Champion Lore", "Lore Fun Fact"] as const;
-const tones = ["Mysterious", "Epic", "Dark", "Tragic", "Cinematic", "Kindred-style"] as const;
+const contentTypes = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
+const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
-const durations = ["1min15", "1min30", "1min40"] as const;
+const durations = ["45s", "60s"] as const;
 const languages = ["English", "French", "Spanish"] as const;
-const narrativeAngles = [
-  "Core tragedy",
-  "Cause and consequence",
-  "Character motivation",
-  "Region politics",
-  "Beginner explainer",
-  "Mythic horror",
-  "Moral ambiguity",
-] as const;
+const sourceTypes = ["Unknown / Let AI assess", "Base champion voice line", "Skin voice line", "Legends of Runeterra", "Wild Rift", "Cinematic", "Riot Universe story", "Old / legacy lore"] as const;
+const narrativeAngles = ["Relationship", "Conflict", "Trauma", "Ideology", "Family tie", "Rivalry", "Hidden subtext"] as const;
 const audienceLevels = ["New to lore", "Casual player", "Lore fan"] as const;
 const creatorGoals = ["Teach clearly", "Maximize retention", "Prepare voiceover", "Spark comments"] as const;
 
 const durationWordRanges = {
-  "1min15": { min: 185, max: 210, label: "1 minute 15 seconds" },
-  "1min30": { min: 220, max: 250, label: "1 minute 30 seconds" },
-  "1min40": { min: 250, max: 280, label: "1 minute 40 seconds" },
+  "45s": { min: 115, max: 145, label: "45 seconds" },
+  "60s": { min: 145, max: 175, label: "60 seconds" },
 } as const;
 
 const dailyTopics = [
-  "The fall of Icathia",
-  "Aatrox and the Darkin",
-  "Mordekaiser's return",
-  "Ryze and the World Runes",
-  "The Watchers beneath the Freljord",
-  "The Ruination of the Blessed Isles",
-  "The tragedy of Azir and Xerath",
-  "Kindred and Runeterra's idea of death",
-  "The Void's first breach into Runeterra",
-  "The Black Mist and Shadow Isles",
-  "Lissandra's bargain with the Watchers",
-  "The origins of Pantheon and Atreus",
+  "Aatrox voice line toward Pantheon",
+  "Swain voice line toward Raum-related secrets",
+  "Mordekaiser interaction with LeBlanc",
+  "Vayne interaction with Evelynn",
+  "Yasuo and Yone interaction",
+  "Jinx and Vi relationship voice lines",
+  "Nasus and Renekton brother conflict",
+  "Lucian and Senna interaction after the Ruination",
+  "Kayle and Morgana sister conflict",
+  "Azir and Xerath betrayal subtext",
 ];
 
 type LoreRequest = {
   contentType?: string;
   topic?: string;
+  quote?: string;
+  speaker?: string;
+  target?: string;
+  sourceType?: string;
   tone?: string;
   platform?: string;
   duration?: string;
@@ -57,6 +51,17 @@ type LoreRequest = {
 type LorePack = {
   title: string;
   hook: string;
+  interaction: {
+    speaker: string;
+    quote: string;
+    target: string;
+    sourceType: string;
+    canonStatus: "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN";
+  };
+  canonContext: string;
+  whatItReveals: string;
+  importantCanonLimit: string;
+  tiktokScript: string;
   script: string;
   voiceReadyScript: string;
   captionVersion: string[];
@@ -111,6 +116,7 @@ function validateLorePack(value: unknown): LorePack | null {
   }
 
   const pack = value as Record<string, unknown>;
+  const interaction = pack.interaction;
   const visualBeats = pack.visualBeats;
   const retentionBreakdown = pack.retentionBreakdown;
   const loreAccuracyNotes = pack.loreAccuracyNotes;
@@ -118,6 +124,17 @@ function validateLorePack(value: unknown): LorePack | null {
   if (
     typeof pack.title !== "string" ||
     typeof pack.hook !== "string" ||
+    !interaction ||
+    typeof interaction !== "object" ||
+    typeof (interaction as Record<string, unknown>).speaker !== "string" ||
+    typeof (interaction as Record<string, unknown>).quote !== "string" ||
+    typeof (interaction as Record<string, unknown>).target !== "string" ||
+    typeof (interaction as Record<string, unknown>).sourceType !== "string" ||
+    typeof (interaction as Record<string, unknown>).canonStatus !== "string" ||
+    typeof pack.canonContext !== "string" ||
+    typeof pack.whatItReveals !== "string" ||
+    typeof pack.importantCanonLimit !== "string" ||
+    typeof pack.tiktokScript !== "string" ||
     typeof pack.script !== "string" ||
     typeof pack.voiceReadyScript !== "string" ||
     !isStringArray(pack.captionVersion) ||
@@ -173,9 +190,9 @@ function firstSentence(text: string) {
 
 function qualityIssues(pack: LorePack, range: { min: number; max: number }) {
   const issues: string[] = [];
-  const wordCount = countWords(pack.script);
-  const opening = firstSentence(pack.script);
-  const lowerScript = pack.script.toLowerCase();
+  const wordCount = countWords(pack.tiktokScript || pack.script);
+  const opening = firstSentence(pack.tiktokScript || pack.script);
+  const lowerScript = (pack.tiktokScript || pack.script).toLowerCase();
   const weakOpenings = [
     "today we are going to",
     "welcome back",
@@ -197,6 +214,14 @@ function qualityIssues(pack: LorePack, range: { min: number; max: number }) {
     issues.push("The script needs at least 3 concrete confirmed lore facts.");
   }
 
+  if (!pack.interaction.speaker || !pack.interaction.quote) {
+    issues.push("The interaction must identify the speaker and quote.");
+  }
+
+  if (pack.interaction.canonStatus === "CONFIRMED" && pack.importantCanonLimit.toLowerCase().includes("not officially confirmed")) {
+    issues.push("Canon status and canon limit conflict.");
+  }
+
   if (pack.retentionBreakdown.length < 4) {
     issues.push("The script needs a complete retention breakdown.");
   }
@@ -213,7 +238,7 @@ function qualityIssues(pack: LorePack, range: { min: number; max: number }) {
 }
 
 function qualityReport(pack: LorePack, range: { min: number; max: number }) {
-  const wordCount = countWords(pack.script);
+  const wordCount = countWords(pack.tiktokScript || pack.script);
   const issues = qualityIssues(pack, range);
   const strengths = [
     "Structured for short-form retention",
@@ -238,6 +263,10 @@ function qualityReport(pack: LorePack, range: { min: number; max: number }) {
 function buildPrompt({
   contentType,
   topic,
+  quote,
+  speaker,
+  target,
+  sourceType,
   tone,
   platform,
   duration,
@@ -249,6 +278,10 @@ function buildPrompt({
 }: {
   contentType: string;
   topic: string;
+  quote: string;
+  speaker: string;
+  target: string;
+  sourceType: string;
   tone: string;
   platform: string;
   duration: keyof typeof durationWordRanges;
@@ -260,7 +293,7 @@ function buildPrompt({
 }) {
   const range = durationWordRanges[duration];
 
-  return `Generate a production-ready League of Legends lore short-form script pack.
+  return `Generate a production-ready League of Legends interaction explainer.
 
 Return ONLY valid JSON. No markdown. No comments.
 
@@ -268,6 +301,17 @@ JSON schema:
 {
   "title": string,
   "hook": string,
+  "interaction": {
+    "speaker": string,
+    "quote": string,
+    "target": string,
+    "sourceType": string,
+    "canonStatus": "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN"
+  },
+  "canonContext": string,
+  "whatItReveals": string,
+  "importantCanonLimit": string,
+  "tiktokScript": string,
   "script": string,
   "voiceReadyScript": string,
   "captionVersion": string[],
@@ -289,7 +333,11 @@ JSON schema:
 
 Inputs:
 - Content type: ${contentType}
-- Topic: ${topic}
+- Interaction/topic/quote: ${topic}
+- Exact quote provided by user: ${quote || "Not provided"}
+- Claimed speaker: ${speaker || "Not provided"}
+- Claimed target: ${target || "Not provided"}
+- Claimed source type: ${sourceType}
 - Tone: ${tone}
 - Platform: ${platform}
 - Duration target: ${range.label}
@@ -318,9 +366,14 @@ ANGLE AND AUDIENCE DIRECTION:
   Spark comments = prioritize a nuanced final question and debate angle.
 
 CORE GOAL:
-The video must instruct, not just entertain. The viewer should finish thinking:
-"I actually understand this part of League of Legends lore better now."
-Educational clarity comes first, cinematic intensity second.
+Explain interactions between League of Legends champions: exact voice lines, who says them, who they target, what the line reveals, and the canon lore behind the sentence. The viewer should finish thinking: "I understand this champion interaction better now."
+
+CRITICAL ATTRIBUTION RULE:
+- Never attribute a quote to the wrong champion.
+- Never invent a reply or turn a single quote into a fake dialogue.
+- Never create an interaction that is not confirmed.
+- If the exact quote, speaker, or target cannot be verified from official Riot material, set canonStatus to "UNCONFIRMED" or "RISKY" and clearly state: "I cannot confirm this interaction as canon without an official source."
+- If the line comes from a skin, event, Legends of Runeterra, Wild Rift, or old/legacy version, state that in sourceType and importantCanonLimit.
 
 SCRIPT STYLE:
 - Sound like a high-retention TikTok / Shorts lore creator explaining real League of Legends canon.
@@ -341,6 +394,7 @@ SCRIPT STYLE:
 
 CANON ACCURACY RULES:
 - Use only confirmed official League of Legends / Runeterra lore.
+- Valid source types are Riot Universe bios, official short stories, official in-game voice lines, official narrative events, Riot cinematics, official champion pages, Legends of Runeterra, or Wild Rift when clearly labeled.
 - Do not invent new lore, relationships, motivations, factions, powers, locations, or timelines.
 - Do not add headcanon.
 - Do not exaggerate beyond what is confirmed.
@@ -351,50 +405,27 @@ CANON ACCURACY RULES:
 - Avoid repeated phrases like "according to official lore" or "according to Riot".
 - The output must sound natural, cinematic, and human, not like a disclaimer.
 
-SCRIPT STRUCTURE:
-1. Pattern-interrupt hook:
-   Start with one strong sentence that immediately creates curiosity.
-   Hook styles can include:
-   - "Most players completely misunderstand why..."
-   - "The scariest part of this story is not..."
-   - "This champion did not become a monster by accident."
-   - "There is one detail in this lore that changes everything."
-   - "Before you judge this character, you need to understand what happened first."
-   - "This is one of the most tragic events in Runeterra."
-   - "The reason this war started is much darker than it seems."
-   Do not reuse the same hook style every time.
-2. Stakes in one sentence:
-   Immediately explain why this topic matters in Runeterra.
-3. Clear lore context:
-   Explain the relevant region, champion, event, faction, or conflict for non-experts.
-4. Developed canon explanation:
-   Explain what happened, who was involved, why it mattered, what changed afterward,
-   and the emotional or political consequence.
-5. Retention beats:
-   Every few sentences, add a new piece of information that raises interest:
-   a reversal, surprising canon detail, tragic consequence, motivation, hidden connection,
-   or larger implication in Runeterra.
-6. Educational explanation:
-   Include at least 3 concrete confirmed lore facts. Avoid vague dramatic filler.
-7. Climax / key reveal:
-   End the explanation with the strongest confirmed lore detail.
-8. Final social-media line:
-   End with a short reflection or comment-inviting line that does not sound cheap.
+OUTPUT FORMAT REQUIREMENTS:
+- title: viral title explaining the core interaction.
+- hook: short TikTok-style hook.
+- interaction.speaker: champion who says the quote, or "Unconfirmed" if not verifiable.
+- interaction.quote: exact quote if confirmed. If not confirmed, do not fabricate; write "I cannot confirm this exact quote as canon without an official source."
+- interaction.target: target champion if confirmed, otherwise "Unconfirmed / not target-specific".
+- interaction.sourceType: base champion voice line, skin voice line, Legends of Runeterra, Wild Rift, cinematic, Riot Universe story, old/legacy lore, or unconfirmed.
+- canonContext: official lore behind the line using only confirmed canon.
+- whatItReveals: what the line reveals about relationship, conflict, trauma, ideology, rivalry, family, or old alliance.
+- importantCanonLimit: what is not confirmed and what should not be over-interpreted.
+- tiktokScript: 45-60 second script, short and punchy, 100% canon-safe.
+- script and voiceReadyScript must equal the final tiktokScript for ElevenLabs compatibility.
 
 CONTENT DEPTH RULES:
 - Include clear context.
 - Include at least 3 confirmed lore facts.
-- Include cause-and-effect explanation.
-- Explain why the event, champion, faction, or detail matters.
+- Explain the exact lore behind each important phrase.
+- Distinguish confirmed, implied, and unconfirmed.
 - Make the viewer understand something precise by the end.
-- Use the narrative angle "${narrativeAngle}" as the main lens. Do not try to cover everything.
-- If the topic is broad, focus on one precise angle instead of summarizing everything.
-- If the topic is a champion, do not summarize their whole biography. Explain the core tragedy,
-  conflict, transformation, belief, or consequence that defines them.
-- If the topic is an event, explain what caused it, what happened, who was affected,
-  and why it changed Runeterra.
-- If the topic is a fun fact, make it meaningful to a champion, region, faction,
-  relationship, or historical event.
+- Use the narrative angle "${narrativeAngle}" as the main lens.
+- If the interaction cannot be verified, do not pretend. Explain that it cannot be confirmed, then provide a safer canon-grounded explanation only if possible.
 
 SOCIAL MEDIA REQUIREMENTS:
 - No boring intro such as "Today we are going to talk about".
@@ -419,8 +450,8 @@ VOICEOVER REQUIREMENTS:
 Output field guidance:
 - title: viral but accurate title.
 - hook: one short opening sentence from the script or a tighter version of it.
-- script: polished narration only.
-- voiceReadyScript: same content optimized for spoken delivery with clean paragraph breaks and no production labels.
+- script: same as tiktokScript.
+- voiceReadyScript: same as tiktokScript, optimized for spoken delivery.
 - captionVersion: 4-7 short caption lines suitable for on-screen text.
 - hookVariants: 3 alternate first-sentence hooks with different angles, all accurate.
 - alternateTitles: 3 alternate social-native titles, all accurate and non-clickbait.
@@ -438,12 +469,11 @@ Output field guidance:
 
 QUALITY CHECK BEFORE RETURNING:
 - Is it within the requested word count?
-- Does it have a strong first sentence?
-- Does it contain at least 3 concrete lore facts?
-- Does it avoid fake lore and unsupported claims?
+- Is the quote real or clearly marked unconfirmed?
+- Is the speaker identified correctly?
+- Is the target identified only when confirmed?
+- Does it avoid fake dialogue and unsupported claims?
 - Does it teach something precise?
-- Does it have a strong final payoff?
-- Does it avoid generic filler?
 
 ${retryInstruction ?? ""}
 `;
@@ -483,7 +513,7 @@ function buildIntegratedAccuracyPrompt({
   contentType: string;
   language: string;
 }) {
-  return `Verify and correct this generated League of Legends lore production pack before it reaches the user.
+  return `Verify and correct this generated League of Legends interaction explainer before it reaches the user.
 
 Return ONLY valid JSON matching the same production pack schema. No markdown. No text outside JSON.
 
@@ -491,6 +521,17 @@ JSON schema:
 {
   "title": string,
   "hook": string,
+  "interaction": {
+    "speaker": string,
+    "quote": string,
+    "target": string,
+    "sourceType": string,
+    "canonStatus": "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN"
+  },
+  "canonContext": string,
+  "whatItReveals": string,
+  "importantCanonLimit": string,
+  "tiktokScript": string,
   "script": string,
   "voiceReadyScript": string,
   "captionVersion": string[],
@@ -520,6 +561,8 @@ ${JSON.stringify(pack)}
 
 Strict canon rules:
 - Be conservative and current Riot / Runeterra canon focused.
+- Verify exact quote, speaker, target, and source type.
+- If the quote cannot be verified, the final result must not pretend it is canon. It must clearly say "I cannot confirm this interaction as canon without an official source."
 - Remove invented factions, titles, relationships, causes, motives, powers, locations, or timelines.
 - Remove outdated League institution framing or old removed champion backgrounds.
 - Remove fan theories and unsupported emotional or political consequences presented as fact.
@@ -527,7 +570,7 @@ Strict canon rules:
 - Do not add citations or repeated phrases like "according to Riot", "officially", or "in canon" inside the script.
 - Do not rewrite everything unnecessarily. Keep accurate content and the same social-media energy.
 - Preserve the same language, approximate duration, short-form structure, educational value, and voice-ready rhythm.
-- The final script returned in "script" and "voiceReadyScript" must be the clean, final, lore-accurate version.
+- The final script returned in "tiktokScript", "script", and "voiceReadyScript" must be the clean, final, lore-accurate version.
 - The user should not need a separate accuracy scanner. This response is the final publish-ready pack.
 
 Output requirements:
@@ -578,18 +621,22 @@ export async function POST(request: NextRequest) {
 
   const mode = payload.mode === "daily" ? "daily" : "custom";
   const contentType =
-    mode === "daily" ? pickRandom(contentTypes) : normalizeOption(payload.contentType, contentTypes, "Lore Event");
+    mode === "daily" ? pickRandom(contentTypes) : normalizeOption(payload.contentType, contentTypes, "Voice Line");
   const topic = mode === "daily" ? pickRandom(dailyTopics) : payload.topic?.trim() ?? "";
+  const quote = payload.quote?.trim() ?? "";
+  const speaker = payload.speaker?.trim() ?? "";
+  const target = payload.target?.trim() ?? "";
+  const sourceType = normalizeOption(payload.sourceType, sourceTypes, "Unknown / Let AI assess");
   const tone = normalizeOption(payload.tone, tones, "Mysterious");
   const platform = normalizeOption(payload.platform, platforms, "TikTok");
-  const duration = normalizeOption(payload.duration, durations, "1min30") as keyof typeof durationWordRanges;
+  const duration = normalizeOption(payload.duration, durations, "60s") as keyof typeof durationWordRanges;
   const language = normalizeOption(payload.language, languages, "English");
-  const narrativeAngle = normalizeOption(payload.narrativeAngle, narrativeAngles, "Cause and consequence");
+  const narrativeAngle = normalizeOption(payload.narrativeAngle, narrativeAngles, "Relationship");
   const audienceLevel = normalizeOption(payload.audienceLevel, audienceLevels, "Casual player");
   const creatorGoal = normalizeOption(payload.creatorGoal, creatorGoals, "Teach clearly");
 
-  if (mode === "custom" && !topic) {
-    return jsonError("Enter a League of Legends lore topic before generating.");
+  if (mode === "custom" && !topic && !quote) {
+    return jsonError("Enter an interaction, quote, or champion relationship before generating.");
   }
 
   if (!process.env.OPENAI_API_KEY) {
@@ -609,6 +656,10 @@ export async function POST(request: NextRequest) {
       const prompt = buildPrompt({
         contentType,
         topic,
+        quote,
+        speaker,
+        target,
+        sourceType,
         tone,
         platform,
         duration,
