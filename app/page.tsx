@@ -1,6 +1,11 @@
 "use client";
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  normalizeLoLInteractionResponse,
+  uiLanguageToMetadataCode,
+  type LoLInteractionExplainerResponse,
+} from "@/app/lib/lol-interaction-explainer";
 
 const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
 const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
@@ -31,54 +36,6 @@ type AudienceLevel = (typeof audienceLevels)[number];
 type CreatorGoal = (typeof creatorGoals)[number];
 type SourceType = (typeof sourceTypes)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
-
-type LorePack = {
-  title: string;
-  hook: string;
-  interaction: {
-    speaker: string;
-    quote: string;
-    target: string;
-    sourceType: string;
-    canonStatus: "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN";
-  };
-  canonContext: string;
-  whatItReveals: string;
-  importantCanonLimit: string;
-  tiktokScript: string;
-  script: string;
-  voiceReadyScript: string;
-  captionVersion: string[];
-  hookVariants: string[];
-  alternateTitles: string[];
-  visualBeats: {
-    beat: string;
-    visualSuggestion: string;
-  }[];
-  retentionBreakdown: {
-    moment: string;
-    purpose: string;
-    text: string;
-  }[];
-  loreAccuracyNotes: {
-    fact: string;
-    whyItMatters: string;
-  }[];
-  tiktokDescription: string;
-  instagramCaption: string;
-  youtubeShortsTitle: string;
-  hashtags: string[];
-  pinnedComment: string;
-  qualityReport?: {
-    score: number;
-    passed: boolean;
-    wordCount: number;
-    targetWordRange: string;
-    strengths: string[];
-    warnings: string[];
-  };
-  qualityNote?: string;
-};
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a"];
@@ -160,54 +117,51 @@ function downloadTextFile(fileName: string, content: string, mimeType = "text/pl
   URL.revokeObjectURL(url);
 }
 
-function scriptAsText(pack: LorePack) {
+function scriptAsText(pack: LoLInteractionExplainerResponse) {
+  const { speaker, quote, target, sourceType, sourceReference, canonStatus, interactionType } = pack.interaction;
   return [
-    `Viral title: ${pack.title}`,
+    "Title:",
+    pack.script.title,
     "",
-    `Short hook: ${pack.hook}`,
+    "Hook:",
+    pack.script.hook,
     "",
-    "Interaction:",
-    `${pack.interaction.speaker} says: "${pack.interaction.quote}"`,
-    `To: ${pack.interaction.target}`,
-    `Source: ${pack.interaction.sourceType}`,
-    `Canon status: ${pack.interaction.canonStatus}`,
+    "INTERACTION FOUND",
+    `Champion speaking: ${speaker || "(unspecified)"}`,
+    `Target: ${target || "(unspecified)"}`,
     "",
-    "Canon Context:",
-    pack.canonContext,
+    "Exact voice line:",
+    `"${quote}"`,
     "",
-    "What It Reveals:",
-    pack.whatItReveals,
+    `Interaction type: ${interactionType || "—"}`,
     "",
-    "Important Canon Limit:",
-    pack.importantCanonLimit,
+    `Source type: ${sourceType}`,
+    `Source: ${sourceReference}`,
+    `Canon status: ${canonStatus}`,
     "",
-    "Full narration script:",
-    pack.tiktokScript,
+    "Confirmed facts:",
+    ...(pack.canonResearch.confirmedFacts.length ? pack.canonResearch.confirmedFacts.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Voice-ready version:",
-    pack.voiceReadyScript,
+    "What the line suggests:",
+    ...(pack.canonResearch.lineSuggests.length ? pack.canonResearch.lineSuggests.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Caption-friendly version:",
-    ...pack.captionVersion.map((line) => `- ${line}`),
+    "What is not confirmed:",
+    ...(pack.canonResearch.notConfirmed.length ? pack.canonResearch.notConfirmed.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Suggested visual beats:",
-    ...pack.visualBeats.map((item) => `- ${item.beat}: ${item.visualSuggestion}`),
+    "Full script:",
+    pack.script.fullScript,
     "",
-    "Retention breakdown:",
-    ...pack.retentionBreakdown.map((item) => `- ${item.moment}: ${item.purpose} (${item.text})`),
+    "Caption:",
+    pack.script.caption,
     "",
-    "Lore accuracy notes:",
-    ...pack.loreAccuracyNotes.map((item) => `- ${item.fact}: ${item.whyItMatters}`),
+    "Hashtags:",
+    pack.script.hashtags.length ? pack.script.hashtags.join(" ") : "(none)",
     "",
-    `TikTok description: ${pack.tiktokDescription}`,
-    "",
-    `Instagram caption: ${pack.instagramCaption}`,
-    "",
-    `YouTube Shorts title: ${pack.youtubeShortsTitle}`,
-    "",
-    `Hashtags: ${pack.hashtags.join(" ")}`,
-    "",
-    `Pinned comment question: ${pack.pinnedComment}`,
+    "Metadata:",
+    `language: ${pack.metadata.language}`,
+    `durationTarget: ${pack.metadata.durationTarget}`,
+    `formatVersion: ${pack.metadata.formatVersion}`,
+    `sourceCategory: ${pack.metadata.sourceCategory}`,
   ].join("\n");
 }
 
@@ -232,9 +186,9 @@ function progressForState({
   if (isLoreGenerating) {
     return {
       label: "Analyzing champion interaction",
-      detail: "Checking quote attribution, canon context, risky claims, and returning the final voice-ready explanation.",
+      detail: "Reading written lines from Fandom Champion/LoL/Audio pages (no audio download), then one OpenAI pass for Riot canon + English script.",
       percent: 44,
-      steps: ["Draft script", "Lore accuracy pass", "Final rewrite"],
+      steps: ["Structured JSON", "Normalize fields", "Ready to edit"],
     };
   }
 
@@ -296,7 +250,7 @@ export default function HomePage() {
   const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Relationship");
   const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("Casual player");
   const [creatorGoal, setCreatorGoal] = useState<CreatorGoal>("Teach clearly");
-  const [loreResult, setLoreResult] = useState<LorePack | null>(null);
+  const [loreResult, setLoreResult] = useState<LoLInteractionExplainerResponse | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
   const [editableScript, setEditableScript] = useState("");
@@ -393,8 +347,14 @@ export default function HomePage() {
     event.preventDefault();
     setLoreError("");
 
-    if (generationMode === "custom" && !loreTopic.trim() && !interactionQuote.trim()) {
-      setLoreError("Enter an interaction, quote, or champion relationship before generating.");
+    if (
+      generationMode === "custom" &&
+      !loreTopic.trim() &&
+      !interactionQuote.trim() &&
+      !speakerChampion.trim() &&
+      !targetChampion.trim()
+    ) {
+      setLoreError("Enter a champion name, topic, or quote before generating.");
       return;
     }
 
@@ -424,14 +384,35 @@ export default function HomePage() {
         }),
       });
 
-      const payload = (await response.json().catch(() => null)) as (LorePack & { error?: string }) | null;
-
-      if (!response.ok || !payload) {
-        throw new Error(payload?.error ?? "Lore generation failed. Please try again.");
+      const rawText = await response.text();
+      if (process.env.NODE_ENV === "development") {
+        console.log("[lore client] response status", response.status);
+        console.log("[lore client] raw body", rawText);
       }
 
-      setLoreResult(payload);
-      setEditableScript(payload.script);
+      let parsed: unknown = null;
+      try {
+        parsed = rawText.trim() ? JSON.parse(rawText) : null;
+      } catch (parseErr) {
+        console.error("[lore client] JSON.parse failed", parseErr);
+        console.error("[lore client] raw body (unparsed)", rawText);
+        parsed = null;
+      }
+
+      const langCode = uiLanguageToMetadataCode(loreLanguage);
+      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
+      const normalized = normalizeLoLInteractionResponse(parsed, {
+        language: langCode,
+        durationTarget,
+      });
+
+      if (!response.ok) {
+        console.error("[lore client] non-OK HTTP status", response.status, rawText);
+      }
+
+      setLoreResult(normalized);
+      setEditableScript(normalized.script.fullScript);
+      setLoreError("");
       setVoiceError("");
       setVoiceNotice("");
       if (rawAudioUrl) {
@@ -444,7 +425,17 @@ export default function HomePage() {
       }
       setRawAudioBlob(null);
     } catch (submitError) {
-      setLoreError(submitError instanceof Error ? submitError.message : "Network error while generating lore.");
+      console.error("[lore client] fetch failed", submitError);
+      const fallback = normalizeLoLInteractionResponse(null, {
+        language: uiLanguageToMetadataCode(loreLanguage),
+        durationTarget: loreDuration === "45s" ? "45s" : "45-60s",
+      });
+      const msg = submitError instanceof Error ? submitError.message : "Network error while generating lore.";
+      fallback.canonResearch.notConfirmed = [msg, ...fallback.canonResearch.notConfirmed];
+      fallback.script.title = "Connection or network issue";
+      setLoreResult(fallback);
+      setEditableScript(fallback.script.fullScript);
+      setLoreError("");
     } finally {
       setIsLoreGenerating(false);
     }
@@ -630,17 +621,17 @@ export default function HomePage() {
 
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-5 py-8 sm:px-8 lg:py-12">
         <nav className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-lg font-black text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
-              LC
+            <div className="flex items-center gap-3">
+            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-xs font-black leading-tight text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
+              LoL
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Lore to audio workflow</p>
-              <p className="font-semibold text-white">LoL Lore + Audio Pace Cleaner</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Canon interaction studio</p>
+              <p className="font-semibold text-white">LoL Interaction Explainer + Audio Pace Cleaner</p>
             </div>
           </div>
           <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300 backdrop-blur">
-            Generate script. Voice it. Clean the pacing.
+            Canon-first lines. Viral scripts. Voiceover-ready pacing.
           </div>
         </nav>
 
@@ -661,7 +652,7 @@ export default function HomePage() {
                     Explain League of Legends champion interactions, voice lines, rivalries, family ties, and dialogue subtext with strict canon attribution.
                   </p>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                    Built for a daily workflow: analyze the interaction, get a canon-safe TikTok script, send it to ElevenLabs, then clean the exported audio below.
+                    Two-step pipeline: discover a real champion-to-champion voice line (no invention), then lore + script anchored to that exact quote. If no high-confidence line is found, you get a clear “no verified line” response—no generic lore essay.
                   </p>
                 </div>
 
@@ -813,9 +804,20 @@ export default function HomePage() {
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-emerald-300/20 bg-emerald-400/10 p-4">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-100/70">Production pack ready</p>
-                    <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.title}</h2>
+                    <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.script.title}</h2>
                     <p className="mt-2 text-sm text-emerald-100/75">
-                      Final interaction explainer generated with internal canon guardrails.
+                      Format v{loreResult.metadata.formatVersion} · {loreResult.metadata.language} · {loreResult.metadata.durationTarget} ·{" "}
+                      {loreResult.metadata.sourceCategory ? (
+                        <a
+                          href={loreResult.metadata.sourceCategory}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline decoration-emerald-200/40 underline-offset-2 hover:text-white"
+                        >
+                          Wiki audio category
+                        </a>
+                      ) : null}{" "}
+                      · Canon: {loreResult.interaction.canonStatus.replace(/_/g, " ")}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -847,7 +849,7 @@ export default function HomePage() {
                         <CopyButton value={editableScript} />
                         <button
                           type="button"
-                          onClick={() => setEditableScript(loreResult.script)}
+                          onClick={() => setEditableScript(loreResult.script.fullScript)}
                           className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-violet-200/50 hover:text-white"
                         >
                           Reset to Generated Script
@@ -865,16 +867,41 @@ export default function HomePage() {
 
                   <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
                     <div className="mb-4">
-                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction</p>
-                      <h3 className="mt-1 text-xl font-bold text-white">{loreResult.interaction.speaker} says</h3>
+                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction found</p>
+                      <h3 className="mt-1 text-xl font-bold text-white">Champion speaking: {loreResult.interaction.speaker || "—"}</h3>
                     </div>
                     <blockquote className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-lg font-semibold leading-8 text-cyan-50">
-                      &ldquo;{loreResult.interaction.quote}&rdquo;
+                      &ldquo;{loreResult.interaction.quote || "—"}&rdquo;
                     </blockquote>
                     <div className="mt-4 grid gap-3 text-sm text-slate-300">
-                      <p><span className="font-bold text-white">To:</span> {loreResult.interaction.target}</p>
-                      <p><span className="font-bold text-white">Source:</span> {loreResult.interaction.sourceType}</p>
-                      <p><span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus}</p>
+                      <p>
+                        <span className="font-bold text-white">Target:</span> {loreResult.interaction.target || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Interaction type:</span>{" "}
+                        {loreResult.interaction.interactionType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source type:</span> {loreResult.interaction.sourceType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source:</span>{" "}
+                        {loreResult.interaction.sourceReference?.startsWith("http") ? (
+                          <a
+                            href={loreResult.interaction.sourceReference}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-200 underline decoration-cyan-400/30 underline-offset-2 hover:text-white"
+                          >
+                            {loreResult.interaction.sourceReference}
+                          </a>
+                        ) : (
+                          loreResult.interaction.sourceReference || "—"
+                        )}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus.replace(/_/g, " ")}
+                      </p>
                     </div>
                   </section>
 
@@ -1014,24 +1041,22 @@ export default function HomePage() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <QualityReportCard report={loreResult.qualityReport} qualityNote={loreResult.qualityNote} />
-                  <TextResultCard title="Viral title" value={loreResult.title} />
-                  <TextResultCard title="Short hook" value={loreResult.hook} />
-                  <TextResultCard title="Canon Context" value={loreResult.canonContext} multiline />
-                  <TextResultCard title="What It Reveals" value={loreResult.whatItReveals} multiline />
-                  <TextResultCard title="Important Canon Limit" value={loreResult.importantCanonLimit} multiline />
-                  <TextResultCard title="TikTok Script 45-60s" value={loreResult.tiktokScript} multiline />
-                  <ListResultCard title="Hook variants" items={loreResult.hookVariants} />
-                  <ListResultCard title="Alternate titles" items={loreResult.alternateTitles} />
-                  <RetentionBreakdownCard items={loreResult.retentionBreakdown} />
-                  <LoreAccuracyNotesCard items={loreResult.loreAccuracyNotes} />
-                  <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
-                  <VisualBeatsCard beats={loreResult.visualBeats} />
-                  <TextResultCard title="TikTok description" value={loreResult.tiktokDescription} />
-                  <TextResultCard title="Instagram caption" value={loreResult.instagramCaption} />
-                  <TextResultCard title="YouTube Shorts title" value={loreResult.youtubeShortsTitle} />
-                  <ListResultCard title="Hashtags" items={loreResult.hashtags} />
-                  <TextResultCard title="Pinned comment question" value={loreResult.pinnedComment} />
+                  <TextResultCard title="Short hook" value={loreResult.script.hook} />
+                  <TextResultCard title="Caption" value={loreResult.script.caption} multiline />
+                  <TextResultCard title="Full script (generated)" value={loreResult.script.fullScript} multiline />
+                  <ListResultCard title="Hashtags" items={loreResult.script.hashtags.length ? loreResult.script.hashtags : ["(none)"]} />
+                  <ListResultCard
+                    title="Canon explanation — confirmed facts"
+                    items={loreResult.canonResearch.confirmedFacts.length ? loreResult.canonResearch.confirmedFacts : ["(none)"]}
+                  />
+                  <ListResultCard
+                    title="Canon explanation — what the line suggests"
+                    items={loreResult.canonResearch.lineSuggests.length ? loreResult.canonResearch.lineSuggests : ["(none)"]}
+                  />
+                  <ListResultCard
+                    title="Canon explanation — what is not confirmed"
+                    items={loreResult.canonResearch.notConfirmed.length ? loreResult.canonResearch.notConfirmed : ["(none)"]}
+                  />
                 </div>
               </div>
             ) : (
@@ -1399,251 +1424,6 @@ function ListResultCard({ title, items }: { title: string; items: string[] }) {
         ))}
       </ul>
     </article>
-  );
-}
-
-function VisualBeatsCard({ beats }: { beats: LorePack["visualBeats"] }) {
-  const value = beats.map((beat) => `${beat.beat}: ${beat.visualSuggestion}`).join("\n");
-
-  return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-bold text-white">Suggested visual beats</h3>
-        <CopyButton value={value} />
-      </div>
-      <div className="space-y-3">
-        {beats.map((beat) => (
-          <div key={`${beat.beat}-${beat.visualSuggestion}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-cyan-100">{beat.beat}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">{beat.visualSuggestion}</p>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function TextInputField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  type?: string;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-bold text-slate-200">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
-      />
-    </label>
-  );
-}
-
-function DecimalSliderField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-4">
-        <label className="text-sm font-bold text-slate-200">{label}</label>
-        <span className="rounded-full bg-white/[0.06] px-3 py-1 text-sm font-semibold text-violet-100">
-          {value.toFixed(2)}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-violet-300"
-      />
-    </div>
-  );
-}
-
-function ToggleField({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-left"
-    >
-      <span className="text-sm font-bold text-slate-200">{label}</span>
-      <span className={`rounded-full px-3 py-1 text-xs font-black ${checked ? "bg-emerald-300/15 text-emerald-100" : "bg-white/[0.06] text-slate-400"}`}>
-        {checked ? "On" : "Off"}
-      </span>
-    </button>
-  );
-}
-
-function AudioOutputCard({
-  title,
-  url,
-  emptyText,
-  downloadName,
-}: {
-  title: string;
-  url: string;
-  emptyText: string;
-  downloadName: string;
-}) {
-  return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-bold text-white">{title}</h3>
-        {url ? (
-          <a
-            href={url}
-            download={downloadName}
-            className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-cyan-200/50 hover:text-white"
-          >
-            Download
-          </a>
-        ) : null}
-      </div>
-      {url ? (
-        <audio controls src={url} className="w-full" />
-      ) : (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">{emptyText}</div>
-      )}
-    </article>
-  );
-}
-
-function RetentionBreakdownCard({ items }: { items: LorePack["retentionBreakdown"] }) {
-  const value = items.map((item) => `${item.moment}: ${item.purpose}\n${item.text}`).join("\n\n");
-
-  return (
-    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Retention Breakdown</span>
-        <CopyButton value={value} />
-      </summary>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {items.map((item) => (
-          <div key={`${item.moment}-${item.text}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-violet-100">{item.moment}</p>
-            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{item.purpose}</p>
-            <p className="mt-2 text-sm leading-6 text-slate-300">{item.text}</p>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function LoreAccuracyNotesCard({ items }: { items: LorePack["loreAccuracyNotes"] }) {
-  const value = items.map((item) => `${item.fact}: ${item.whyItMatters}`).join("\n");
-
-  return (
-    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Lore Accuracy Notes</span>
-        <CopyButton value={value} />
-      </summary>
-      <div className="mt-4 space-y-3">
-        {items.map((item) => (
-          <div key={`${item.fact}-${item.whyItMatters}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-cyan-100">{item.fact}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">{item.whyItMatters}</p>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function QualityReportCard({
-  report,
-  qualityNote,
-}: {
-  report?: NonNullable<LorePack["qualityReport"]>;
-  qualityNote?: string;
-}) {
-  if (!report) {
-    return null;
-  }
-
-  const statusColor = report.passed ? "text-emerald-100" : "text-amber-100";
-
-  return (
-    <details open className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Quality Report</span>
-        <span className={`rounded-full bg-white/[0.06] px-3 py-1 text-sm ${statusColor}`}>
-          {report.score}/100
-        </span>
-      </summary>
-      <div className="mt-4 space-y-4 text-sm">
-        {qualityNote ? (
-          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-amber-100">
-            {qualityNote}
-          </div>
-        ) : null}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="font-bold text-cyan-100">Word count</p>
-            <p className="mt-1 text-slate-300">
-              {report.wordCount} words / target {report.targetWordRange}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="font-bold text-cyan-100">Status</p>
-            <p className="mt-1 text-slate-300">{report.passed ? "Ready to record" : "Review suggested"}</p>
-          </div>
-        </div>
-        <ListResultCard title="Quality strengths" items={report.strengths} />
-        {report.warnings.length > 0 ? <ListResultCard title="Quality warnings" items={report.warnings} /> : null}
-      </div>
-    </details>
-  );
-}
-
-function DownloadButton({ label, fileName, content, mimeType }: { label: string; fileName: string; content: string; mimeType: string }) {
-  const href = useMemo(() => {
-    const blob = new Blob([content], { type: mimeType });
-    return URL.createObjectURL(blob);
-  }, [content, mimeType]);
-
-  useEffect(() => {
-    return () => URL.revokeObjectURL(href);
-  }, [href]);
-
-  return (
-    <a
-      href={href}
-      download={fileName}
-      className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-center text-sm font-bold text-white transition hover:border-cyan-200/50 hover:bg-cyan-300/10"
-    >
-      {label}
-    </a>
   );
 }
 
