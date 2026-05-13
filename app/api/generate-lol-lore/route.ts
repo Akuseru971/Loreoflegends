@@ -14,6 +14,12 @@ import {
   type VoiceLineDiscoveryCandidate,
   type VoiceLineDiscoveryPack,
 } from "@/app/lib/lol-interaction-explainer";
+import {
+  fetchChampionAudioSnippetsFromWiki,
+  filterSnippetsByTargetHint,
+  formatWikiSnippetsForPrompt,
+  type WikiAudioSnippet,
+} from "@/app/lib/lol-wiki-audio";
 
 export const runtime = "nodejs";
 
@@ -90,6 +96,59 @@ function durationMetadataTarget(duration: keyof typeof durationWordRanges): stri
   return duration === "45s" ? "45s" : "45-60s";
 }
 
+function dedupeWikiSnippets(list: WikiAudioSnippet[]): WikiAudioSnippet[] {
+  const seen = new Set<string>();
+  const out: WikiAudioSnippet[] = [];
+  for (const s of list) {
+    const k = `${s.speaker}|${s.target}|${s.quote}`.toLowerCase();
+    if (seen.has(k)) {
+      continue;
+    }
+    seen.add(k);
+    out.push(s);
+  }
+  return out;
+}
+
+/**
+ * Pulls /Audio wikitext-derived lines from the Fandom LoL wiki (same tree as
+ * https://wiki.leagueoflegends.com/en-us/Category:LoL_Champion_audio).
+ * Disabled when LOL_WIKI_FETCH=0.
+ */
+async function collectWikiExcerptsForDiscovery(speakerHint: string, targetHint: string): Promise<string> {
+  if (process.env.LOL_WIKI_FETCH === "0") {
+    devLoreLog("wiki fetch", "skipped (LOL_WIKI_FETCH=0)");
+    return "";
+  }
+  if (!speakerHint.trim()) {
+    return "";
+  }
+
+  try {
+    let merged = await fetchChampionAudioSnippetsFromWiki(speakerHint);
+    if (targetHint.trim().length >= 2) {
+      const narrowed = filterSnippetsByTargetHint(merged, targetHint);
+      if (narrowed.length >= 3) {
+        merged = narrowed;
+      } else {
+        merged = dedupeWikiSnippets([...narrowed, ...merged]);
+        const reverse = await fetchChampionAudioSnippetsFromWiki(targetHint);
+        const cross = reverse.filter(
+          (s) =>
+            s.target.toLowerCase().includes(speakerHint.toLowerCase()) ||
+            s.quote.toLowerCase().includes(speakerHint.toLowerCase()),
+        );
+        merged = dedupeWikiSnippets([...merged, ...cross]);
+      }
+    }
+    devLoreLog("wiki snippet count", merged.length);
+    return formatWikiSnippetsForPrompt(merged.slice(0, 45), 14_000);
+  } catch (error) {
+    devLoreLog("wiki fetch error", error instanceof Error ? error.message : error);
+    return "";
+  }
+}
+
 function rankSourceCategory(cat: string): number {
   const order = ["league_base_special", "league_skin", "cinematic_or_story", "lor", "wild_rift", "old_removed", "unknown"];
   const i = order.indexOf(cat);
@@ -150,6 +209,32 @@ function pickHighConfidenceCandidate(
   return [...high].sort((a, b) => rankSourceCategory(a.sourceCategory) - rankSourceCategory(b.sourceCategory))[0];
 }
 
+/**
+ * If wiki excerpts were loaded, downgrade "high" candidates whose quote does not
+ * appear in the excerpt text (prevents hallucinated "high" rows).
+ */
+function alignDiscoveryConfidenceWithWiki(pack: VoiceLineDiscoveryPack, wikiExcerptBlock: string): VoiceLineDiscoveryPack {
+  if (!wikiExcerptBlock.trim()) {
+    return pack;
+  }
+  const hay = wikiExcerptBlock.toLowerCase();
+  const next = pack.candidates.map((c) => {
+    if (c.confidence !== "high") {
+      return c;
+    }
+    const q = c.quote.replace(/\s+/g, " ").trim().toLowerCase();
+    if (q.length < 6) {
+      return { ...c, confidence: "medium" as const };
+    }
+    const needle = q.length > 72 ? q.slice(0, 72) : q;
+    if (!hay.includes(needle)) {
+      return { ...c, confidence: "medium" as const };
+    }
+    return c;
+  });
+  return { ...pack, candidates: next };
+}
+
 function quoteAnchorsScript(quote: string, script: string): boolean {
   const q = quote.replace(/\s+/g, " ").trim();
   if (q.length < 4) {
@@ -181,6 +266,7 @@ function buildDiscoveryPrompt({
   speaker,
   target,
   sourceType,
+  wikiExcerptBlock,
 }: {
   contentType: string;
   topic: string;
@@ -188,10 +274,25 @@ function buildDiscoveryPrompt({
   speaker: string;
   target: string;
   sourceType: string;
+  wikiExcerptBlock: string;
 }) {
+  const wikiSection =
+    wikiExcerptBlock.trim().length > 0 ?
+      `WIKI_EXCERPTS (League of Legends Fandom wiki — parsed from champion /Audio pages under Category:LoL_Champion_audio; community CC-BY-SA transcriptions, still verify in client):
+${wikiExcerptBlock}
+
+When these excerpts are present:
+- A "high" confidence candidate MUST use a quote that appears VERBATIM (or as an obvious substring after trimming whitespace) in the excerpt list for that speaker→target row.
+- Prefer sourceCategory "league_base_special" unless the header/section clearly indicates skin, LoR, WR, cinematic, or legacy content.
+- Mention in discoveryNotes that candidates were checked against these excerpts.
+`
+    : `WIKI_EXCERPTS: (none retrieved — e.g. champion name mismatch, wiki timeout, or LOL_WIKI_FETCH=0). Use extreme caution: do NOT mark "high" unless you are independently certain from official Riot shipping audio you remember perfectly. Prefer "low" or "medium" or selectedCandidateIndex -1.`;
+
   return `PASS A — VOICE LINE DISCOVERY (no lore essay, no script).
 
 You are a specialist in League of Legends champion voice lines and interactions. You do NOT browse the live internet, but you MUST only output candidate lines you are highly confident are real, verbatim (or extremely close) champion-to-champion lines from official Riot shipping content.
+
+${wikiSection}
 
 ABSOLUTE RULES:
 - NEVER invent a quote or paraphrase it as if it were exact.
@@ -410,6 +511,9 @@ export async function POST(request: NextRequest) {
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
+  const speakerHint = speaker.trim() || topic.trim().split(/\s+/)[0] || "";
+  const wikiExcerptBlock = await collectWikiExcerptsForDiscovery(speakerHint, target);
+
   const discoveryUser = buildDiscoveryPrompt({
     contentType,
     topic,
@@ -417,6 +521,7 @@ export async function POST(request: NextRequest) {
     speaker,
     target,
     sourceType,
+    wikiExcerptBlock,
   });
 
   let discoveryRaw = "";
@@ -451,7 +556,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
-  const discoveryPack = normalizeVoiceLineDiscoveryPack(discoveryParsed.value);
+  let discoveryPack = normalizeVoiceLineDiscoveryPack(discoveryParsed.value);
   if (!discoveryPack) {
     const body = failureLoLInteractionResponse({
       notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE],
@@ -461,9 +566,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
+  discoveryPack = alignDiscoveryConfidenceWithWiki(discoveryPack, wikiExcerptBlock);
   devLoreLog("Pass A normalized discovery", discoveryPack);
 
-  const speakerHint = speaker.trim() || topic.trim().split(/\s+/)[0] || "";
   const chosen = pickHighConfidenceCandidate(discoveryPack, { speaker: speakerHint, target, quote });
   if (!chosen) {
     const body = failureLoLInteractionResponse({
