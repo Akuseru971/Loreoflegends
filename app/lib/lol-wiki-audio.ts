@@ -1,16 +1,18 @@
 /**
- * League of Legends Fandom wiki — champion /Audio pages (Category:LoL_Champion_audio).
- * Used as the ONLY source for verbatim champion-to-champion voice lines before any GPT pass.
+ * League of Legends Fandom — written champion interactions on `Champion/LoL/Audio` pages
+ * (Category:LoL_Champion_audio). We only use MediaWiki **wikitext** (already transcribed on the wiki).
+ * We never download, play, or transcribe .ogg / .mp3 / .wav files.
  *
  * Content is community-maintained (CC-BY-SA). Always attribute with sourceUrl.
  */
 
-const WIKI_API = "https://wiki.leagueoflegends.com/api.php";
+const WIKI_API = "https://leagueoflegends.fandom.com/api.php";
 const USER_AGENT =
-  "LoreoflegendsInteractionExplainer/1.0 (+https://github.com/Akuseru971/Loreoflegends; wiki API read-only)";
+  "Mozilla/5.0 (compatible; LoreoflegendsInteractionExplainer/1.0; +https://github.com/Akuseru971/Loreoflegends; Fandom API read-only)";
 
+/** Human-readable index; API uses the same category title on the fandom.org host. */
 export const LOL_WIKI_AUDIO_CATEGORY_URL =
-  "https://wiki.leagueoflegends.com/en-us/Category:LoL_Champion_audio";
+  "https://leagueoflegends.fandom.com/wiki/Category:LoL_Champion_audio";
 
 const CATEGORY_TITLE = "Category:LoL_Champion_audio";
 
@@ -67,13 +69,14 @@ function normalizeNameKey(name: string): string {
   return name.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function wikiEnUsPageUrl(pageTitle: string): string {
+/** Canonical reader URL for a Fandom content page (written wiki HTML; we still fetch wikitext via API). */
+function wikiFandomArticleUrl(pageTitle: string): string {
   const slug = pageTitle.replace(/ /g, "_");
-  return `https://wiki.leagueoflegends.com/en-us/${slug}`;
+  return `https://leagueoflegends.fandom.com/wiki/${slug}`;
 }
 
 function audioPageTitle(championKey: string): string {
-  return `${championKey}/Audio`;
+  return `${championKey}/LoL/Audio`;
 }
 
 async function wikiGet(params: Record<string, string>): Promise<unknown> {
@@ -93,9 +96,9 @@ async function wikiGet(params: Record<string, string>): Promise<unknown> {
 }
 
 /**
- * All member page titles under Category:LoL_Champion_audio (e.g. "Swain/Audio").
+ * All member page titles under Category:LoL_Champion_audio (e.g. "Swain/LoL/Audio").
  */
-export async function fetchAllChampionAudioPageTitles(): Promise<string[]> {
+export async function extractChampionAudioPageLinksFromCategory(): Promise<string[]> {
   if (categoryTitlesCache && categoryTitlesCache.expires > Date.now()) {
     return categoryTitlesCache.titles;
   }
@@ -123,7 +126,7 @@ export async function fetchAllChampionAudioPageTitles(): Promise<string[]> {
 
     const batch = data.query?.categorymembers ?? [];
     for (const m of batch) {
-      if (m.title.endsWith("/Audio")) {
+      if (m.title.endsWith("/LoL/Audio")) {
         titles.push(m.title);
       }
     }
@@ -221,9 +224,11 @@ function headerSupportsDirectedChampionLine(headerLine: string): boolean {
   }
   return (
     h.includes("first encounter") ||
+    h.includes("upon first encounter") ||
     h.includes("taunt response to") ||
     h.includes("taunt") ||
     h.includes("joke response to") ||
+    h.includes("joke") ||
     h.includes("laugh response to") ||
     h.includes("first move with enemy") ||
     h.includes("killing ") ||
@@ -234,13 +239,15 @@ function headerSupportsDirectedChampionLine(headerLine: string): boolean {
     h.includes("attacking ") ||
     h.includes("attack ") ||
     h.includes("respawn") ||
-    h.includes("recall")
+    h.includes("recall") ||
+    h.includes("champion-specific") ||
+    h.includes("special interaction")
   );
 }
 
 function deriveInteractionType(headerLine: string, wikiSection: string): string {
   const h = headerLine.toLowerCase();
-  if (h.includes("first encounter")) {
+  if (h.includes("upon first encounter") || h.includes("first encounter")) {
     return "First encounter";
   }
   if (h.includes("taunt response to")) {
@@ -290,7 +297,7 @@ function extractQuotedVoiceFromBullet(line: string): string | null {
 }
 
 function pageSpeakerFromTitle(pageTitle: string): string {
-  const base = pageTitle.replace(/\/Audio$/i, "");
+  const base = pageTitle.replace(/\/LoL\/Audio$/i, "").replace(/\/Audio$/i, "");
   return base.replace(/_/g, " ");
 }
 
@@ -319,7 +326,7 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
         interactionType,
         wikiSection: currentSection,
         wikiPageTitle: pageTitle,
-        sourceUrl: wikiEnUsPageUrl(pageTitle),
+        sourceUrl: wikiFandomArticleUrl(pageTitle),
         headerLine: header,
         isSkinContext: skin,
       });
@@ -379,7 +386,7 @@ function dedupeInteractions(rows: WikiVoiceInteraction[]): WikiVoiceInteraction[
   return out;
 }
 
-function scoreInteractionBase(row: WikiVoiceInteraction): number {
+export function scoreInteractionForShortFormContent(row: WikiVoiceInteraction): number {
   let s = 0;
   const q = row.quote.toLowerCase();
   const drama = [
@@ -448,7 +455,7 @@ function scoreForFocus(
   focusPrimary: string,
   focusSecondary: string | undefined,
 ): number {
-  let s = scoreInteractionBase(row);
+  let s = scoreInteractionForShortFormContent(row);
   const pk = normalizeNameKey(focusPrimary);
   const sk = focusSecondary ? normalizeNameKey(focusSecondary) : "";
   const sp = normalizeNameKey(row.speaker);
@@ -505,10 +512,10 @@ export type FindVoiceLineResult = {
 };
 
 /**
- * Locates a real champion-to-champion voice line from Fandom /Audio pages listed in
+ * Locates a written champion-to-champion interaction from Fandom Champion/LoL/Audio pages listed in
  * Category:LoL_Champion_audio, including reverse lookups via related champions' pages.
  */
-export async function findChampionVoiceLineInteraction(opts: FindVoiceLineOptions): Promise<FindVoiceLineResult | null> {
+export async function findWrittenChampionInteractions(opts: FindVoiceLineOptions): Promise<FindVoiceLineResult | null> {
   if (process.env.LOL_WIKI_FETCH === "0") {
     return null;
   }
@@ -524,7 +531,7 @@ export async function findChampionVoiceLineInteraction(opts: FindVoiceLineOption
 
   let allTitles: string[] = [];
   try {
-    allTitles = await fetchAllChampionAudioPageTitles();
+    allTitles = await extractChampionAudioPageLinksFromCategory();
   } catch {
     allTitles = [];
   }
@@ -627,3 +634,9 @@ export async function findChampionVoiceLineInteraction(opts: FindVoiceLineOption
 
   return { selected: best, candidatesConsidered: pool.length };
 }
+
+/** Same parser as parseWikiVoiceInteractions — explicit name for written lines only. */
+export { parseWikiVoiceInteractions as extractChampionToChampionInteractionsFromWikitext };
+
+/** @deprecated Prefer findWrittenChampionInteractions. */
+export const findChampionVoiceLineInteraction = findWrittenChampionInteractions;

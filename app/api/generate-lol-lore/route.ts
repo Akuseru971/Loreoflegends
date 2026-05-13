@@ -10,7 +10,7 @@ import {
   parseOpenAiJsonContent,
   uiLanguageToMetadataCode,
 } from "@/app/lib/lol-interaction-explainer";
-import { findChampionVoiceLineInteraction, LOL_WIKI_AUDIO_CATEGORY_URL, type WikiVoiceInteraction } from "@/app/lib/lol-wiki-audio";
+import { findWrittenChampionInteractions, LOL_WIKI_AUDIO_CATEGORY_URL, type WikiVoiceInteraction } from "@/app/lib/lol-wiki-audio";
 
 export const runtime = "nodejs";
 
@@ -93,7 +93,7 @@ function topicFirstToken(topic: string): string {
 
 /**
  * Resolve which champion(s) drive the wiki crawl. Speaker + target as a pair narrows to both;
- * a single field uses that champion and enables reverse lookup inside findChampionVoiceLineInteraction.
+ * a single field uses that champion and enables reverse lookup inside findWrittenChampionInteractions.
  */
 function resolveWikiFocus(speaker: string, target: string, topic: string): { primaryDisplay: string; secondaryDisplay?: string } {
   const s = speaker.trim();
@@ -161,11 +161,12 @@ function buildExpansionPrompt(opts: {
   const qJson = JSON.stringify(v.quote);
   const skinNote = v.isSkinContext ?
     "This line is under a skin-specific wiki block (e.g. {{csl|…}} or skin tab). You MUST label it clearly as alternate skin voice-over in notConfirmed and/or lineSuggests, and use canonStatus partially_verified unless the line is identical on base."
-  : "Parsed from the wiki /Audio page (community transcription). Remind viewers to confirm in the live client.";
+  : "Parsed from written wikitext on the Fandom `Champion/LoL/Audio` page (community transcription). Never infer text from .ogg filenames or audio binaries.";
 
   return `PASS B — OFFICIAL RIOT LORE + ENGLISH SHORT-FORM SCRIPT (voice line is frozen; do not change one word of the quote).
 
-LOCKED LINE (from Fandom LoL wiki champion /Audio pages — Category:LoL_Champion_audio):
+LOCKED LINE (verbatim written quote from leagueoflegends.fandom.com Champion/LoL/Audio — Category:LoL_Champion_audio).
+We never download, play, or transcribe audio files; only text already printed on the wiki.
 - Speaker: ${v.speaker}
 - Target: ${v.target}
 - Quote (verbatim): ${qJson}
@@ -180,7 +181,7 @@ User context (secondary): contentType=${opts.contentType}, topic=${opts.topic ||
 STEP 1 — Canon research (Riot Universe, official bios, official short stories, cinematics, events, official champion pages ONLY):
 - confirmedFacts: only what those official sources establish.
 - lineSuggests: careful "may suggest / could imply" readings tied to this quote.
-- notConfirmed: limits, unknowns, and anything not explicitly confirmed by Riot.
+- notConfirmed: limits, unknowns, and anything not explicitly confirmed by Riot. When appropriate, include the exact sentence: "This is not officially confirmed in canon."
 
 STEP 2 — Script (English only):
 - metadata.language MUST be "en".
@@ -194,9 +195,9 @@ STEP 2 — Script (English only):
 STEP 3 — interaction JSON (must mirror the locked line):
 - speaker, target, quote: EXACT strings above.
 - interactionType: EXACT string above.
-- sourceType: "League of Legends champion audio page"
+- sourceType: "Written champion interaction from Fandom LoL champion audio page"
 - sourceReference: EXACT URL above.
-- canonStatus: ${v.isSkinContext ? '"partially_verified" (skin VO context)' : '"verified_voice_line"'}
+- canonStatus: ${v.isSkinContext ? '"partially_verified" (skin-specific written VO block on Fandom)' : '"verified_written_voice_line"'}
 
 STEP 4 — hashtags: 4–8 strings, include #LeagueOfLegends or #LoL plus champion tags.
 
@@ -318,9 +319,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
-  let wikiResult: Awaited<ReturnType<typeof findChampionVoiceLineInteraction>> = null;
+  let wikiResult: Awaited<ReturnType<typeof findWrittenChampionInteractions>> = null;
   try {
-    wikiResult = await findChampionVoiceLineInteraction({
+    wikiResult = await findWrittenChampionInteractions({
       primaryDisplay,
       secondaryDisplay,
     });
@@ -361,7 +362,7 @@ export async function POST(request: NextRequest) {
   try {
     expansionRaw = await callOpenAiWithSchema(openai, {
       system:
-        "You are a League of Legends lore analyst. You NEVER invent voice lines. The wiki line in the user message is absolute ground truth for the quote text and speaker/target. You separate official Riot canon from speculation. Output JSON only.",
+        "You are a League of Legends lore analyst. You NEVER invent written voice lines. You NEVER analyze, download, or transcribe audio files (.ogg, .mp3, .wav). The written quote in the user message is absolute ground truth. Separate official Riot canon from speculation. Output JSON only.",
       user: expansionUser,
       schemaName: "lol_interaction_explainer",
       schema: OPENAI_LOL_INTERACTION_SCHEMA as unknown as Record<string, unknown>,
@@ -388,7 +389,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
-  const forcedCanon = verified.isSkinContext ? ("partially_verified" as const) : ("verified_voice_line" as const);
+  const forcedCanon = verified.isSkinContext ? ("partially_verified" as const) : ("verified_written_voice_line" as const);
 
   let normalized = normalizeLoLInteractionResponse(expansionParsed.value, normalizeOpts);
   normalized = {
@@ -406,7 +407,7 @@ export async function POST(request: NextRequest) {
       target: verified.target,
       quote: verified.quote,
       interactionType: verified.interactionType,
-      sourceType: "League of Legends champion audio page",
+      sourceType: "Written champion interaction from Fandom LoL champion audio page",
       sourceReference: verified.sourceUrl,
       canonStatus: forcedCanon,
     },

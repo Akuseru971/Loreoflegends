@@ -2,7 +2,7 @@
  * Shared contract for POST /api/generate-lol-lore — used by API route and client UI.
  */
 
-export type LoLCanonStatus = "verified" | "partially_verified" | "unconfirmed" | "verified_voice_line";
+export type LoLCanonStatus = "verified_written_voice_line" | "partially_verified" | "unconfirmed";
 
 export type LoLInteractionExplainerResponse = {
   interaction: {
@@ -36,9 +36,9 @@ export type LoLInteractionExplainerResponse = {
 
 export const LOL_INTERACTION_FORMAT_VERSION = "1.0";
 
-/** Shown when no champion-to-champion line could be read from Fandom /Audio pages. */
+/** Shown when no written champion-to-champion line could be parsed from Fandom LoL/Audio pages. */
 export const NO_VERIFIED_VOICE_LINE_MESSAGE =
-  "No verified voice line interaction was found from the champion audio pages.";
+  "No verified written champion interaction was found from the Fandom LoL champion audio pages.";
 
 /** OpenAI `json_schema.schema` value (strict mode: every key listed in `required`). */
 export const OPENAI_LOL_INTERACTION_SCHEMA = {
@@ -59,7 +59,7 @@ export const OPENAI_LOL_INTERACTION_SCHEMA = {
         interactionType: { type: "string" },
         canonStatus: {
           type: "string",
-          enum: ["verified", "partially_verified", "unconfirmed", "verified_voice_line"],
+          enum: ["verified_written_voice_line", "partially_verified", "unconfirmed"],
         },
       },
     },
@@ -111,7 +111,7 @@ export const OPENAI_LOL_INTERACTION_SCHEMA = {
   },
 } as const;
 
-const CANON_STATUSES: LoLCanonStatus[] = ["verified", "partially_verified", "unconfirmed", "verified_voice_line"];
+const CANON_STATUSES: LoLCanonStatus[] = ["verified_written_voice_line", "partially_verified", "unconfirmed"];
 
 function ensureString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -125,12 +125,18 @@ function ensureStringArray(value: unknown): string[] {
 }
 
 function ensureCanonStatus(value: unknown): LoLCanonStatus {
-  return typeof value === "string" && CANON_STATUSES.includes(value as LoLCanonStatus)
-    ? (value as LoLCanonStatus)
-    : "unconfirmed";
+  if (typeof value === "string") {
+    if (CANON_STATUSES.includes(value as LoLCanonStatus)) {
+      return value as LoLCanonStatus;
+    }
+    if (value === "verified_voice_line" || value === "verified") {
+      return "verified_written_voice_line";
+    }
+  }
+  return "unconfirmed";
 }
 
-const WIKI_AUDIO_CATEGORY_URL = "https://wiki.leagueoflegends.com/en-us/Category:LoL_Champion_audio";
+const WIKI_AUDIO_CATEGORY_URL = "https://leagueoflegends.fandom.com/wiki/Category:LoL_Champion_audio";
 
 export function failureLoLInteractionResponse(overrides?: {
   notConfirmed?: string[];
@@ -143,7 +149,7 @@ export function failureLoLInteractionResponse(overrides?: {
       speaker: "",
       target: "",
       quote: "",
-      sourceType: "League of Legends champion audio page",
+      sourceType: "Written champion interaction from Fandom LoL champion audio page",
       sourceReference: WIKI_AUDIO_CATEGORY_URL,
       interactionType: "",
       canonStatus: "unconfirmed",

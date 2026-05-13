@@ -186,7 +186,7 @@ function progressForState({
   if (isLoreGenerating) {
     return {
       label: "Analyzing champion interaction",
-      detail: "Fetching wiki /Audio lines from the Fandom category, then one OpenAI pass for canon + English script.",
+      detail: "Reading written lines from Fandom Champion/LoL/Audio pages (no audio download), then one OpenAI pass for Riot canon + English script.",
       percent: 44,
       steps: ["Structured JSON", "Normalize fields", "Ready to edit"],
     };
