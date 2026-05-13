@@ -7,6 +7,7 @@ import {
   uiLanguageToMetadataCode,
   type LoLInteractionExplainerResponse,
 } from "@/app/lib/lol-interaction-explainer";
+import type { InteractionExplainApiResponse } from "@/app/lib/lol-interaction-explain-openai";
 import { LOL_WIKI_AUDIO_CATEGORY_URL } from "@/app/lib/lol-wiki-audio";
 
 function wikiPageTitleFromAudioPageUrl(url: string): string {
@@ -159,6 +160,25 @@ function scriptAsText(pack: LoLInteractionExplainerResponse) {
     "Hashtags:",
     pack.script.hashtags.length ? pack.script.hashtags.join(" ") : "(none)",
     "",
+    ...(pack.script.timedStructure?.length ?
+      [
+        "Timed beats (7s structure):",
+        ...pack.script.timedStructure.map((b) => `[${b.time}] ${b.purpose}: ${b.text}`),
+        "",
+      ]
+    : []),
+    ...(pack.explainResearch ?
+      [
+        "Sources used (model + server fetches):",
+        ...pack.explainResearch.sourcesUsed.map((s) => `- [${s.type}] ${s.title}: ${s.url}`),
+        "",
+        "Fandom / wiki context (raw research bucket):",
+        ...(pack.explainResearch.fandomContext.length ?
+          pack.explainResearch.fandomContext.map((line) => `- ${line}`)
+        : ["- (none)"]),
+        "",
+      ]
+    : []),
     "Metadata:",
     `language: ${pack.metadata.language}`,
     `durationTarget: ${pack.metadata.durationTarget}`,
@@ -188,7 +208,8 @@ function progressForState({
   if (isLoreGenerating) {
     return {
       label: "Analyzing champion interaction",
-      detail: "Reading written lines from Fandom Champion/LoL/Audio pages (no audio download), then one OpenAI pass for Riot canon + English script.",
+      detail:
+        "Fetching Riot + Fandom excerpts on the server, then one structured JSON pass for cross-checked canon, beats, and English script.",
       percent: 44,
       steps: ["Structured JSON", "Normalize fields", "Ready to edit"],
     };
@@ -522,47 +543,56 @@ export default function HomePage() {
           section: row.section,
           sourceUrl: row.sourceUrl,
           isSkinContext: row.isSkinContext,
-          tone: DEFAULT_LORE_TONE,
-          platform: DEFAULT_LORE_PLATFORM,
-          duration: DEFAULT_LORE_DURATION,
-          narrativeAngle: DEFAULT_NARRATIVE_ANGLE,
-          audienceLevel: DEFAULT_AUDIENCE_LEVEL,
-          creatorGoal: DEFAULT_CREATOR_GOAL,
-          language: DEFAULT_LORE_LANGUAGE,
         }),
       });
-      const raw = (await response.json()) as Record<string, unknown>;
+      const raw = (await response.json()) as InteractionExplainApiResponse & { error?: string };
       if (!response.ok) {
         setLoreError(typeof raw.error === "string" ? raw.error : "Explain request failed.");
         return;
       }
+      if (raw.error && !raw.script?.fullScript?.trim()) {
+        setLoreError(raw.error);
+        return;
+      }
+
+      const data = raw;
       const durationTarget = DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s";
       const langCode = uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE);
-      const interaction = raw.interaction as {
-        speaker: string;
-        target: string;
-        quote: string;
-        interactionType: string;
-        sourceUrl: string;
-      };
+
       const partial = {
         interaction: {
-          speaker: interaction.speaker,
-          target: interaction.target,
-          quote: interaction.quote,
-          interactionType: interaction.interactionType,
+          speaker: data.interaction.speaker,
+          target: data.interaction.target,
+          quote: data.interaction.quote,
+          interactionType: data.interaction.interactionType,
           sourceType: row.sourceType,
-          sourceReference: interaction.sourceUrl,
-          canonStatus: "verified_written_voice_line" as const,
+          sourceReference: data.interaction.sourceUrl,
+          canonStatus: row.isSkinContext ? ("partially_verified" as const) : ("verified_written_voice_line" as const),
         },
-        canonResearch: raw.canonResearch,
-        script: raw.script,
+        canonResearch: {
+          confirmedFacts: data.research.officialCanonFacts,
+          lineSuggests: [
+            ...data.research.whatTheLineMeans.map((t) => `What the line means: ${t}`),
+            ...data.research.whatTheLineSuggests.map((t) => `What it suggests: ${t}`),
+            ...data.research.fandomContext.map((t) => `Fandom / wiki context: ${t}`),
+          ],
+          notConfirmed: data.research.notConfirmed,
+        },
+        script: {
+          title: data.script.title,
+          hook: data.script.hook,
+          fullScript: data.script.fullScript,
+          caption: data.script.caption,
+          hashtags: data.script.hashtags,
+          timedStructure: data.script.timedStructure,
+        },
         metadata: {
           language: "en",
           durationTarget,
           formatVersion: LOL_INTERACTION_FORMAT_VERSION,
           sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
         },
+        explainResearch: data.research,
       };
       const normalized = normalizeLoLInteractionResponse(partial, { language: langCode, durationTarget });
       setLoreResult(normalized);
@@ -766,7 +796,7 @@ export default function HomePage() {
 
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-5 py-8 sm:px-8 lg:py-12">
         <nav className="flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3">
             <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-xs font-black leading-tight text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
               LoL
             </div>
@@ -1284,6 +1314,46 @@ export default function HomePage() {
                     title="Canon explanation — what is not confirmed"
                     items={loreResult.canonResearch.notConfirmed.length ? loreResult.canonResearch.notConfirmed : ["(none)"]}
                   />
+                  {loreResult.explainResearch?.fandomContext?.length ? (
+                    <ListResultCard
+                      title="Fandom / wiki context (secondary)"
+                      items={loreResult.explainResearch.fandomContext}
+                    />
+                  ) : null}
+                  {loreResult.explainResearch?.sourcesUsed?.length ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4">
+                      <h4 className="text-sm font-bold text-slate-200">Sources referenced</h4>
+                      <ul className="mt-2 space-y-2 text-sm text-slate-300">
+                        {loreResult.explainResearch.sourcesUsed.map((s, i) => (
+                          <li key={`${s.url}-${i}`}>
+                            <span className="text-cyan-200/90">[{s.type}]</span> {s.title}
+                            {s.url?.startsWith("http") ? (
+                              <>
+                                {" "}
+                                <a href={s.url} className="text-cyan-200 underline underline-offset-2" target="_blank" rel="noreferrer">
+                                  Link
+                                </a>
+                              </>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  {loreResult.script.timedStructure?.length ? (
+                    <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-4 lg:col-span-2">
+                      <h4 className="text-sm font-bold text-slate-200">Short-form beats (~7s)</h4>
+                      <ul className="mt-3 space-y-3 text-sm leading-6 text-slate-300">
+                        {loreResult.script.timedStructure.map((b) => (
+                          <li key={b.time} className="border-b border-white/5 pb-3 last:border-0 last:pb-0">
+                            <span className="font-bold text-cyan-200">{b.time}</span>
+                            <span className="text-slate-500"> — {b.purpose}</span>
+                            <p className="mt-1 text-slate-200">{b.text}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             ) : (

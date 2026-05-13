@@ -4,6 +4,17 @@
 
 export type LoLCanonStatus = "verified_written_voice_line" | "partially_verified" | "unconfirmed";
 
+export type LoreTimedBeat = { time: string; purpose: string; text: string };
+
+export type LoreExplainResearchPayload = {
+  officialCanonFacts: string[];
+  fandomContext: string[];
+  whatTheLineMeans: string[];
+  whatTheLineSuggests: string[];
+  notConfirmed: string[];
+  sourcesUsed: Array<{ title: string; url: string; type: string }>;
+};
+
 export type LoLInteractionExplainerResponse = {
   interaction: {
     speaker: string;
@@ -25,6 +36,7 @@ export type LoLInteractionExplainerResponse = {
     fullScript: string;
     caption: string;
     hashtags: string[];
+    timedStructure?: LoreTimedBeat[];
   };
   metadata: {
     language: string;
@@ -32,6 +44,8 @@ export type LoLInteractionExplainerResponse = {
     formatVersion: string;
     sourceCategory: string;
   };
+  /** Present when generated via POST /api/interactions/explain (cross-source research). */
+  explainResearch?: LoreExplainResearchPayload;
 };
 
 export const LOL_INTERACTION_FORMAT_VERSION = "1.0";
@@ -136,6 +150,55 @@ function ensureCanonStatus(value: unknown): LoLCanonStatus {
   return "unconfirmed";
 }
 
+function ensureTimedBeats(value: unknown): LoreTimedBeat[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const out: LoreTimedBeat[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const o = item as Record<string, unknown>;
+    out.push({
+      time: ensureString(o.time),
+      purpose: ensureString(o.purpose),
+      text: ensureString(o.text),
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+function ensureExplainResearch(value: unknown): LoreExplainResearchPayload | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const r = value as Record<string, unknown>;
+  const sourcesRaw = r.sourcesUsed;
+  const sourcesUsed: LoreExplainResearchPayload["sourcesUsed"] = [];
+  if (Array.isArray(sourcesRaw)) {
+    for (const s of sourcesRaw) {
+      if (!s || typeof s !== "object") {
+        continue;
+      }
+      const o = s as Record<string, unknown>;
+      sourcesUsed.push({
+        title: ensureString(o.title),
+        url: ensureString(o.url),
+        type: ensureString(o.type),
+      });
+    }
+  }
+  return {
+    officialCanonFacts: ensureStringArray(r.officialCanonFacts),
+    fandomContext: ensureStringArray(r.fandomContext),
+    whatTheLineMeans: ensureStringArray(r.whatTheLineMeans),
+    whatTheLineSuggests: ensureStringArray(r.whatTheLineSuggests),
+    notConfirmed: ensureStringArray(r.notConfirmed),
+    sourcesUsed,
+  };
+}
+
 const WIKI_AUDIO_CATEGORY_URL = "https://leagueoflegends.fandom.com/wiki/Category:LoL_Champion_audio";
 
 export function failureLoLInteractionResponse(overrides?: {
@@ -206,8 +269,13 @@ export function normalizeLoLInteractionResponse(
     root.canonResearch && typeof root.canonResearch === "object" ? (root.canonResearch as Record<string, unknown>) : {};
   const script = root.script && typeof root.script === "object" ? (root.script as Record<string, unknown>) : {};
   const metadata = root.metadata && typeof root.metadata === "object" ? (root.metadata as Record<string, unknown>) : {};
+  const timedStructure = ensureTimedBeats(script.timedStructure);
+  const researchObj = root.research && typeof root.research === "object" ? (root.research as Record<string, unknown>) : null;
+  const explainResearch =
+    ensureExplainResearch(root.explainResearch) ??
+    (researchObj && Array.isArray(researchObj.officialCanonFacts) ? ensureExplainResearch(researchObj) : undefined);
 
-  return {
+  const out: LoLInteractionExplainerResponse = {
     interaction: {
       speaker: ensureString(interaction.speaker),
       target: ensureString(interaction.target),
@@ -228,6 +296,7 @@ export function normalizeLoLInteractionResponse(
       fullScript: ensureString(script.fullScript),
       caption: ensureString(script.caption),
       hashtags: ensureStringArray(script.hashtags),
+      ...(timedStructure ? { timedStructure } : {}),
     },
     metadata: {
       language: ensureString(metadata.language, defaults.language) || defaults.language,
@@ -235,7 +304,9 @@ export function normalizeLoLInteractionResponse(
       formatVersion: ensureString(metadata.formatVersion, LOL_INTERACTION_FORMAT_VERSION) || LOL_INTERACTION_FORMAT_VERSION,
       sourceCategory: ensureString(metadata.sourceCategory, WIKI_AUDIO_CATEGORY_URL) || WIKI_AUDIO_CATEGORY_URL,
     },
+    ...(explainResearch ? { explainResearch } : {}),
   };
+  return out;
 }
 
 /** Strip ```json fences and extract first JSON object if needed. */
