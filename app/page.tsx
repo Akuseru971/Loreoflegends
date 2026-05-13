@@ -1,6 +1,21 @@
 "use client";
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  LOL_INTERACTION_FORMAT_VERSION,
+  normalizeLoLInteractionResponse,
+  uiLanguageToMetadataCode,
+  type LoLInteractionExplainerResponse,
+} from "@/app/lib/lol-interaction-explainer";
+import { LOL_WIKI_AUDIO_CATEGORY_URL } from "@/app/lib/lol-wiki-audio";
+
+function wikiPageTitleFromAudioPageUrl(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).pathname.replace(/^\/wiki\//, ""));
+  } catch {
+    return "";
+  }
+}
 
 const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
 const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
@@ -31,54 +46,6 @@ type AudienceLevel = (typeof audienceLevels)[number];
 type CreatorGoal = (typeof creatorGoals)[number];
 type SourceType = (typeof sourceTypes)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
-
-type LorePack = {
-  title: string;
-  hook: string;
-  interaction: {
-    speaker: string;
-    quote: string;
-    target: string;
-    sourceType: string;
-    canonStatus: "CONFIRMED" | "UNCONFIRMED" | "RISKY" | "LEGACY_OR_SKIN";
-  };
-  canonContext: string;
-  whatItReveals: string;
-  importantCanonLimit: string;
-  tiktokScript: string;
-  script: string;
-  voiceReadyScript: string;
-  captionVersion: string[];
-  hookVariants: string[];
-  alternateTitles: string[];
-  visualBeats: {
-    beat: string;
-    visualSuggestion: string;
-  }[];
-  retentionBreakdown: {
-    moment: string;
-    purpose: string;
-    text: string;
-  }[];
-  loreAccuracyNotes: {
-    fact: string;
-    whyItMatters: string;
-  }[];
-  tiktokDescription: string;
-  instagramCaption: string;
-  youtubeShortsTitle: string;
-  hashtags: string[];
-  pinnedComment: string;
-  qualityReport?: {
-    score: number;
-    passed: boolean;
-    wordCount: number;
-    targetWordRange: string;
-    strengths: string[];
-    warnings: string[];
-  };
-  qualityNote?: string;
-};
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
 const ACCEPTED_EXTENSIONS = ["mp3", "wav", "m4a"];
@@ -160,54 +127,51 @@ function downloadTextFile(fileName: string, content: string, mimeType = "text/pl
   URL.revokeObjectURL(url);
 }
 
-function scriptAsText(pack: LorePack) {
+function scriptAsText(pack: LoLInteractionExplainerResponse) {
+  const { speaker, quote, target, sourceType, sourceReference, canonStatus, interactionType } = pack.interaction;
   return [
-    `Viral title: ${pack.title}`,
+    "Title:",
+    pack.script.title,
     "",
-    `Short hook: ${pack.hook}`,
+    "Hook:",
+    pack.script.hook,
     "",
-    "Interaction:",
-    `${pack.interaction.speaker} says: "${pack.interaction.quote}"`,
-    `To: ${pack.interaction.target}`,
-    `Source: ${pack.interaction.sourceType}`,
-    `Canon status: ${pack.interaction.canonStatus}`,
+    "INTERACTION FOUND",
+    `Champion speaking: ${speaker || "(unspecified)"}`,
+    `Target: ${target || "(unspecified)"}`,
     "",
-    "Canon Context:",
-    pack.canonContext,
+    "Exact voice line:",
+    `"${quote}"`,
     "",
-    "What It Reveals:",
-    pack.whatItReveals,
+    `Interaction type: ${interactionType || "—"}`,
     "",
-    "Important Canon Limit:",
-    pack.importantCanonLimit,
+    `Source type: ${sourceType}`,
+    `Source: ${sourceReference}`,
+    `Canon status: ${canonStatus}`,
     "",
-    "Full narration script:",
-    pack.tiktokScript,
+    "Confirmed facts:",
+    ...(pack.canonResearch.confirmedFacts.length ? pack.canonResearch.confirmedFacts.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Voice-ready version:",
-    pack.voiceReadyScript,
+    "What the line suggests:",
+    ...(pack.canonResearch.lineSuggests.length ? pack.canonResearch.lineSuggests.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Caption-friendly version:",
-    ...pack.captionVersion.map((line) => `- ${line}`),
+    "What is not confirmed:",
+    ...(pack.canonResearch.notConfirmed.length ? pack.canonResearch.notConfirmed.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Suggested visual beats:",
-    ...pack.visualBeats.map((item) => `- ${item.beat}: ${item.visualSuggestion}`),
+    "Full script:",
+    pack.script.fullScript,
     "",
-    "Retention breakdown:",
-    ...pack.retentionBreakdown.map((item) => `- ${item.moment}: ${item.purpose} (${item.text})`),
+    "Caption:",
+    pack.script.caption,
     "",
-    "Lore accuracy notes:",
-    ...pack.loreAccuracyNotes.map((item) => `- ${item.fact}: ${item.whyItMatters}`),
+    "Hashtags:",
+    pack.script.hashtags.length ? pack.script.hashtags.join(" ") : "(none)",
     "",
-    `TikTok description: ${pack.tiktokDescription}`,
-    "",
-    `Instagram caption: ${pack.instagramCaption}`,
-    "",
-    `YouTube Shorts title: ${pack.youtubeShortsTitle}`,
-    "",
-    `Hashtags: ${pack.hashtags.join(" ")}`,
-    "",
-    `Pinned comment question: ${pack.pinnedComment}`,
+    "Metadata:",
+    `language: ${pack.metadata.language}`,
+    `durationTarget: ${pack.metadata.durationTarget}`,
+    `formatVersion: ${pack.metadata.formatVersion}`,
+    `sourceCategory: ${pack.metadata.sourceCategory}`,
   ].join("\n");
 }
 
@@ -232,9 +196,9 @@ function progressForState({
   if (isLoreGenerating) {
     return {
       label: "Analyzing champion interaction",
-      detail: "Checking quote attribution, canon context, risky claims, and returning the final voice-ready explanation.",
+      detail: "Reading written lines from Fandom Champion/LoL/Audio pages (no audio download), then one OpenAI pass for Riot canon + English script.",
       percent: 44,
-      steps: ["Draft script", "Lore accuracy pass", "Final rewrite"],
+      steps: ["Structured JSON", "Normalize fields", "Ready to edit"],
     };
   }
 
@@ -296,10 +260,53 @@ export default function HomePage() {
   const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Relationship");
   const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("Casual player");
   const [creatorGoal, setCreatorGoal] = useState<CreatorGoal>("Teach clearly");
-  const [loreResult, setLoreResult] = useState<LorePack | null>(null);
+  const [loreResult, setLoreResult] = useState<LoLInteractionExplainerResponse | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
   const [editableScript, setEditableScript] = useState("");
+
+  type ExplorerChampion = { name: string; audioPageUrl: string };
+  type ExplorerWrittenInteraction = {
+    speaker: string;
+    target: string;
+    quote: string;
+    interactionType: string;
+    section: string;
+    sourceUrl: string;
+    sourcePageTitle: string;
+    sourceType: string;
+    isSkinContext: boolean;
+  };
+  type ExplorerInteractionsResponse = {
+    selectedChampion: string;
+    slug: string;
+    audioPageUrl: string;
+    spokenByChampion: ExplorerWrittenInteraction[];
+    spokenToChampion: ExplorerWrittenInteraction[];
+    allInteractions: ExplorerWrittenInteraction[];
+    count: {
+      spokenByChampion: number;
+      spokenToChampion: number;
+      spokenByFirstEncounter?: number;
+      total: number;
+    };
+    extractionNote?: string;
+    error?: string;
+  };
+
+  const [explorerChampions, setExplorerChampions] = useState<ExplorerChampion[]>([]);
+  const [explorerCategoryUrl, setExplorerCategoryUrl] = useState("");
+  const [explorerChampionsLoading, setExplorerChampionsLoading] = useState(true);
+  const [explorerChampionsError, setExplorerChampionsError] = useState("");
+  const [explorerChampionQuery, setExplorerChampionQuery] = useState("");
+  const [selectedExplorerSlug, setSelectedExplorerSlug] = useState("");
+  const [explorerInteractions, setExplorerInteractions] = useState<ExplorerInteractionsResponse | null>(null);
+  const [explorerInteractionsLoading, setExplorerInteractionsLoading] = useState(false);
+  const [explorerInteractionsError, setExplorerInteractionsError] = useState("");
+  const [explorerTab, setExplorerTab] = useState<"by" | "to" | "all">("by");
+  const [explorerFilterTarget, setExplorerFilterTarget] = useState("");
+  const [explorerFilterType, setExplorerFilterType] = useState("");
+  const [explorerFilterQuote, setExplorerFilterQuote] = useState("");
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState("");
   const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("");
   const [elevenLabsModel, setElevenLabsModel] = useState<ElevenLabsModel>("eleven_multilingual_v2");
@@ -343,6 +350,143 @@ export default function HomePage() {
       }
     };
   }, [rawAudioUrl, cleanedGeneratedAudioUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setExplorerChampionsLoading(true);
+      setExplorerChampionsError("");
+      try {
+        const res = await fetch("/api/champions");
+        const data = (await res.json()) as {
+          champions?: ExplorerChampion[];
+          sourceCategory?: string;
+          error?: string;
+        };
+        if (cancelled) {
+          return;
+        }
+        if (!res.ok) {
+          setExplorerChampionsError(data.error ?? "Failed to load champions.");
+          setExplorerChampions([]);
+        } else {
+          setExplorerChampions(Array.isArray(data.champions) ? data.champions : []);
+          setExplorerCategoryUrl(typeof data.sourceCategory === "string" ? data.sourceCategory : "");
+        }
+      } catch {
+        if (!cancelled) {
+          setExplorerChampionsError("Network error while loading champions.");
+        }
+      } finally {
+        if (!cancelled) {
+          setExplorerChampionsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedExplorerSlug) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setExplorerInteractionsLoading(true);
+      setExplorerInteractionsError("");
+      try {
+        const enc = encodeURIComponent(selectedExplorerSlug);
+        const res = await fetch(`/api/champions/${enc}/interactions`);
+        const data = await res.json();
+        if (cancelled) {
+          return;
+        }
+        if (!res.ok) {
+          setExplorerInteractions(null);
+          setExplorerInteractionsError(typeof data.error === "string" ? data.error : "Failed to load interactions.");
+        } else {
+          setExplorerInteractions(data as ExplorerInteractionsResponse);
+        }
+      } catch {
+        if (!cancelled) {
+          setExplorerInteractions(null);
+          setExplorerInteractionsError("Network error while loading interactions.");
+        }
+      } finally {
+        if (!cancelled) {
+          setExplorerInteractionsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedExplorerSlug]);
+
+  const explorerChampionOptions = useMemo(() => {
+    const q = explorerChampionQuery.trim().toLowerCase();
+    if (!q) {
+      return explorerChampions;
+    }
+    return explorerChampions.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        wikiPageTitleFromAudioPageUrl(c.audioPageUrl).toLowerCase().includes(q.replace(/\s+/g, "_").toLowerCase()),
+    );
+  }, [explorerChampions, explorerChampionQuery]);
+
+  const explorerFilteredRows = useMemo(() => {
+    if (!explorerInteractions) {
+      return [];
+    }
+    const rows =
+      explorerTab === "by"
+        ? explorerInteractions.spokenByChampion
+        : explorerTab === "to"
+          ? explorerInteractions.spokenToChampion
+          : explorerInteractions.allInteractions;
+    const ft = explorerFilterTarget.trim().toLowerCase();
+    const fty = explorerFilterType.trim().toLowerCase();
+    const fq = explorerFilterQuote.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (ft && !r.target.toLowerCase().includes(ft) && !r.speaker.toLowerCase().includes(ft)) {
+        return false;
+      }
+      if (fty && !r.interactionType.toLowerCase().includes(fty) && !r.section.toLowerCase().includes(fty)) {
+        return false;
+      }
+      if (fq && !r.quote.toLowerCase().includes(fq)) {
+        return false;
+      }
+      return true;
+    });
+  }, [explorerInteractions, explorerTab, explorerFilterTarget, explorerFilterType, explorerFilterQuote]);
+
+  async function refreshExplorerInteractions() {
+    if (!selectedExplorerSlug) {
+      return;
+    }
+    setExplorerInteractionsLoading(true);
+    setExplorerInteractionsError("");
+    try {
+      const enc = encodeURIComponent(selectedExplorerSlug);
+      const res = await fetch(`/api/champions/${enc}/interactions?refresh=1`);
+      const data = await res.json();
+      if (!res.ok) {
+        setExplorerInteractions(null);
+        setExplorerInteractionsError(typeof data.error === "string" ? data.error : "Refresh failed.");
+      } else {
+        setExplorerInteractions(data as ExplorerInteractionsResponse);
+      }
+    } catch {
+      setExplorerInteractions(null);
+      setExplorerInteractionsError("Network error on refresh.");
+    } finally {
+      setExplorerInteractionsLoading(false);
+    }
+  }
 
   const canProcess = useMemo(() => Boolean(file) && !isProcessing, [file, isProcessing]);
 
@@ -389,49 +533,45 @@ export default function HomePage() {
     selectFile(event.dataTransfer.files?.[0] ?? null);
   }
 
-  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
-    event.preventDefault();
-    setLoreError("");
-
-    if (generationMode === "custom" && !loreTopic.trim() && !interactionQuote.trim()) {
-      setLoreError("Enter an interaction, quote, or champion relationship before generating.");
-      return;
-    }
-
-    setIsLoreGenerating(true);
-
+  async function submitLoreRequest(body: Record<string, unknown>) {
     try {
       const response = await fetch("/api/generate-lol-lore", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          contentType: loreContentType,
-          topic: loreTopic,
-          quote: interactionQuote,
-          speaker: speakerChampion,
-          target: targetChampion,
-          sourceType,
-          tone: loreTone,
-          platform: lorePlatform,
-          duration: loreDuration,
-          language: loreLanguage,
-          narrativeAngle,
-          audienceLevel,
-          creatorGoal,
-          mode: generationMode,
-        }),
+        body: JSON.stringify(body),
       });
 
-      const payload = (await response.json().catch(() => null)) as (LorePack & { error?: string }) | null;
-
-      if (!response.ok || !payload) {
-        throw new Error(payload?.error ?? "Lore generation failed. Please try again.");
+      const rawText = await response.text();
+      if (process.env.NODE_ENV === "development") {
+        console.log("[lore client] response status", response.status);
+        console.log("[lore client] raw body", rawText);
       }
 
-      setLoreResult(payload);
-      setEditableScript(payload.script);
+      let parsed: unknown = null;
+      try {
+        parsed = rawText.trim() ? JSON.parse(rawText) : null;
+      } catch (parseErr) {
+        console.error("[lore client] JSON.parse failed", parseErr);
+        console.error("[lore client] raw body (unparsed)", rawText);
+        parsed = null;
+      }
+
+      const langCode = uiLanguageToMetadataCode(loreLanguage);
+      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
+      const normalized = normalizeLoLInteractionResponse(parsed, {
+        language: langCode,
+        durationTarget,
+      });
+
+      if (!response.ok) {
+        console.error("[lore client] non-OK HTTP status", response.status, rawText);
+      }
+
+      setLoreResult(normalized);
+      setEditableScript(normalized.script.fullScript);
+      setLoreError("");
       setVoiceError("");
       setVoiceNotice("");
       if (rawAudioUrl) {
@@ -444,7 +584,132 @@ export default function HomePage() {
       }
       setRawAudioBlob(null);
     } catch (submitError) {
-      setLoreError(submitError instanceof Error ? submitError.message : "Network error while generating lore.");
+      console.error("[lore client] fetch failed", submitError);
+      const fallback = normalizeLoLInteractionResponse(null, {
+        language: uiLanguageToMetadataCode(loreLanguage),
+        durationTarget: loreDuration === "45s" ? "45s" : "45-60s",
+      });
+      const msg = submitError instanceof Error ? submitError.message : "Network error while generating lore.";
+      fallback.canonResearch.notConfirmed = [msg, ...fallback.canonResearch.notConfirmed];
+      fallback.script.title = "Connection or network issue";
+      setLoreResult(fallback);
+      setEditableScript(fallback.script.fullScript);
+      setLoreError("");
+    }
+  }
+
+  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
+    event.preventDefault();
+    setLoreError("");
+
+    if (
+      generationMode === "custom" &&
+      !loreTopic.trim() &&
+      !interactionQuote.trim() &&
+      !speakerChampion.trim() &&
+      !targetChampion.trim()
+    ) {
+      setLoreError("Enter a champion name, topic, or quote before generating.");
+      return;
+    }
+
+    setIsLoreGenerating(true);
+    try {
+      await submitLoreRequest({
+        contentType: loreContentType,
+        topic: loreTopic,
+        quote: interactionQuote,
+        speaker: speakerChampion,
+        target: targetChampion,
+        sourceType,
+        tone: loreTone,
+        platform: lorePlatform,
+        duration: loreDuration,
+        language: loreLanguage,
+        narrativeAngle,
+        audienceLevel,
+        creatorGoal,
+        mode: generationMode,
+      });
+    } finally {
+      setIsLoreGenerating(false);
+    }
+  }
+
+  async function handleExplainExplorerLine(row: ExplorerWrittenInteraction) {
+    setLoreError("");
+    setIsLoreGenerating(true);
+    try {
+      const response = await fetch("/api/interactions/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          speaker: row.speaker,
+          target: row.target,
+          quote: row.quote,
+          interactionType: row.interactionType,
+          section: row.section,
+          sourceUrl: row.sourceUrl,
+          isSkinContext: row.isSkinContext,
+          tone: loreTone,
+          platform: lorePlatform,
+          duration: loreDuration,
+          narrativeAngle,
+          audienceLevel,
+          creatorGoal,
+          language: loreLanguage,
+        }),
+      });
+      const raw = (await response.json()) as Record<string, unknown>;
+      if (!response.ok) {
+        setLoreError(typeof raw.error === "string" ? raw.error : "Explain request failed.");
+        return;
+      }
+      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
+      const langCode = uiLanguageToMetadataCode(loreLanguage);
+      const interaction = raw.interaction as {
+        speaker: string;
+        target: string;
+        quote: string;
+        interactionType: string;
+        sourceUrl: string;
+      };
+      const partial = {
+        interaction: {
+          speaker: interaction.speaker,
+          target: interaction.target,
+          quote: interaction.quote,
+          interactionType: interaction.interactionType,
+          sourceType: row.sourceType,
+          sourceReference: interaction.sourceUrl,
+          canonStatus: "verified_written_voice_line" as const,
+        },
+        canonResearch: raw.canonResearch,
+        script: raw.script,
+        metadata: {
+          language: "en",
+          durationTarget,
+          formatVersion: LOL_INTERACTION_FORMAT_VERSION,
+          sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+        },
+      };
+      const normalized = normalizeLoLInteractionResponse(partial, { language: langCode, durationTarget });
+      setLoreResult(normalized);
+      setEditableScript(normalized.script.fullScript);
+      setVoiceError("");
+      setVoiceNotice("");
+      if (rawAudioUrl) {
+        URL.revokeObjectURL(rawAudioUrl);
+        setRawAudioUrl("");
+      }
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+        setCleanedGeneratedAudioUrl("");
+      }
+      setRawAudioBlob(null);
+    } catch (explainError) {
+      console.error("[explorer explain]", explainError);
+      setLoreError(explainError instanceof Error ? explainError.message : "Network error while explaining.");
     } finally {
       setIsLoreGenerating(false);
     }
@@ -630,17 +895,17 @@ export default function HomePage() {
 
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-5 py-8 sm:px-8 lg:py-12">
         <nav className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-lg font-black text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
-              LC
+            <div className="flex items-center gap-3">
+            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-xs font-black leading-tight text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
+              LoL
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Lore to audio workflow</p>
-              <p className="font-semibold text-white">LoL Lore + Audio Pace Cleaner</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Canon interaction studio</p>
+              <p className="font-semibold text-white">LoL Interaction Explainer + Audio Pace Cleaner</p>
             </div>
           </div>
           <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300 backdrop-blur">
-            Generate script. Voice it. Clean the pacing.
+            Canon-first lines. Viral scripts. Voiceover-ready pacing.
           </div>
         </nav>
 
@@ -661,7 +926,7 @@ export default function HomePage() {
                     Explain League of Legends champion interactions, voice lines, rivalries, family ties, and dialogue subtext with strict canon attribution.
                   </p>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                    Built for a daily workflow: analyze the interaction, get a canon-safe TikTok script, send it to ElevenLabs, then clean the exported audio below.
+                    Two-step pipeline: discover a real champion-to-champion voice line (no invention), then lore + script anchored to that exact quote. If no high-confidence line is found, you get a clear “no verified line” response—no generic lore essay.
                   </p>
                 </div>
 
@@ -808,14 +1073,286 @@ export default function HomePage() {
               </form>
             </div>
 
+            <div className="mt-8 rounded-[1.5rem] border border-cyan-300/15 bg-slate-950/50 p-5 sm:p-6">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-200/70">Live explorer</p>
+                  <h2 className="mt-1 text-xl font-bold text-white">Fandom written interactions</h2>
+                  <p className="mt-2 max-w-3xl text-sm text-slate-400">
+                    Champions are listed from the{" "}
+                    {explorerCategoryUrl ? (
+                      <a
+                        href={explorerCategoryUrl}
+                        className="text-cyan-200 underline underline-offset-2"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        LoL champion audio category
+                      </a>
+                    ) : (
+                      "LoL champion audio category"
+                    )}
+                    . The server parses written wiki text only — no .ogg / .mp3 / .wav download or transcription.
+                  </p>
+                </div>
+                {explorerChampionsLoading ? (
+                  <span className="text-sm text-slate-400">Loading champions…</span>
+                ) : (
+                  <span className="text-sm text-slate-400">{explorerChampions.length} champions</span>
+                )}
+              </div>
+
+              {explorerChampionsError ? (
+                <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                  {explorerChampionsError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Search champion</span>
+                  <input
+                    value={explorerChampionQuery}
+                    onChange={(event) => setExplorerChampionQuery(event.target.value)}
+                    placeholder="Filter list (e.g. Swain, Jinx)…"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Select champion</span>
+                  <select
+                    value={selectedExplorerSlug}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setSelectedExplorerSlug(next);
+                      if (!next) {
+                        setExplorerInteractions(null);
+                      }
+                      setExplorerTab("by");
+                      setExplorerFilterTarget("");
+                      setExplorerFilterType("");
+                      setExplorerFilterQuote("");
+                    }}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-200/50"
+                  >
+                    <option value="">— Choose a champion —</option>
+                    {explorerChampionOptions.map((champion) => {
+                      const pageTitle = wikiPageTitleFromAudioPageUrl(champion.audioPageUrl);
+                      return (
+                        <option key={champion.audioPageUrl} value={pageTitle}>
+                          {champion.name}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </label>
+              </div>
+
+              {selectedExplorerSlug ? (
+                <div className="mt-6 space-y-4 border-t border-white/10 pt-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-slate-400">Selected champion</p>
+                      <p className="text-lg font-bold text-white">
+                        {explorerInteractions?.selectedChampion ?? selectedExplorerSlug.replace(/_/g, " ")}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void refreshExplorerInteractions()}
+                        disabled={explorerInteractionsLoading}
+                        className="rounded-2xl border border-white/15 bg-white/[0.06] px-4 py-2 text-sm font-bold text-white transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Refresh interactions
+                      </button>
+                      {explorerInteractions?.audioPageUrl ? (
+                        <a
+                          href={explorerInteractions.audioPageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-2xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-400/15"
+                        >
+                          Open Fandom page
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {explorerInteractionsLoading ? (
+                    <p className="text-sm text-slate-400">Loading written interactions from Fandom…</p>
+                  ) : null}
+                  {explorerInteractionsError ? (
+                    <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                      {explorerInteractionsError}
+                    </div>
+                  ) : null}
+                  {explorerInteractions?.error ? (
+                    <div className="rounded-2xl border border-amber-300/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">
+                      {explorerInteractions.error}
+                    </div>
+                  ) : null}
+
+                  {explorerInteractions && !explorerInteractionsLoading ? (
+                    <>
+                      <p className="text-sm text-slate-300">
+                        <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> —{" "}
+                        <span className="text-cyan-200">{explorerInteractions.count.spokenByChampion}</span> lines spoken by
+                        them on their Fandom audio page
+                        {typeof explorerInteractions.count.spokenByFirstEncounter === "number" ? (
+                          <>
+                            {" "}
+                            (<span className="text-cyan-100">{explorerInteractions.count.spokenByFirstEncounter}</span> tagged
+                            &ldquo;First Encounter&rdquo;)
+                          </>
+                        ) : null}
+                        . <span className="text-cyan-200">{explorerInteractions.count.spokenToChampion}</span> lines where they
+                        are the target (from other champions&rsquo; pages).{" "}
+                        <span className="text-white">{explorerInteractions.count.total}</span> unique cards in &ldquo;All&rdquo;.
+                      </p>
+                      {explorerInteractions.extractionNote ? (
+                        <p className="text-xs text-slate-500">{explorerInteractions.extractionNote}</p>
+                      ) : null}
+
+                      <div className="flex flex-wrap gap-2">
+                        {(() => {
+                          const nm = explorerInteractions.selectedChampion;
+                          return (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("by")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "by"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                Spoken by {nm}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("to")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "to"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                Spoken to {nm}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("all")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "all"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                All interactions
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Filter champion (speaker or target)</span>
+                          <input
+                            value={explorerFilterTarget}
+                            onChange={(event) => setExplorerFilterTarget(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="e.g. Jinx"
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Interaction type</span>
+                          <input
+                            value={explorerFilterType}
+                            onChange={(event) => setExplorerFilterType(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="Taunt, Kill, First…"
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Search in quote</span>
+                          <input
+                            value={explorerFilterQuote}
+                            onChange={(event) => setExplorerFilterQuote(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="Keyword"
+                          />
+                        </label>
+                      </div>
+
+                      <p className="text-sm text-slate-400">
+                        Showing <span className="text-white">{explorerFilteredRows.length}</span> interaction cards
+                      </p>
+
+                      <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+                        {explorerFilteredRows.map((row, index) => (
+                          <div
+                            key={`${row.speaker}|${row.target}|${row.quote}|${index}`}
+                            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-xs uppercase tracking-wider text-slate-500">{row.interactionType}</p>
+                                <p className="font-bold text-white">
+                                  {row.speaker} → {row.target}
+                                </p>
+                                <p className="text-xs text-slate-500">Section: {row.section}</p>
+                              </div>
+                              <a
+                                href={row.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-semibold text-cyan-200 underline underline-offset-2"
+                              >
+                                {row.sourcePageTitle || "Fandom audio page"}
+                              </a>
+                            </div>
+                            <blockquote className="mt-3 border-l-2 border-cyan-400/40 pl-3 text-sm leading-relaxed text-slate-100">
+                              &ldquo;{row.quote}&rdquo;
+                            </blockquote>
+                            <button
+                              type="button"
+                              disabled={isLoreGenerating}
+                              onClick={() => void handleExplainExplorerLine(row)}
+                              className="mt-4 w-full rounded-2xl bg-gradient-to-r from-violet-400/80 to-cyan-400/80 py-3 text-sm font-black text-slate-950 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Explain this interaction
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
             {loreResult ? (
               <div className="mt-8 space-y-5">
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-emerald-300/20 bg-emerald-400/10 p-4">
                   <div>
                     <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-100/70">Production pack ready</p>
-                    <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.title}</h2>
+                    <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.script.title}</h2>
                     <p className="mt-2 text-sm text-emerald-100/75">
-                      Final interaction explainer generated with internal canon guardrails.
+                      Format v{loreResult.metadata.formatVersion} · {loreResult.metadata.language} · {loreResult.metadata.durationTarget} ·{" "}
+                      {loreResult.metadata.sourceCategory ? (
+                        <a
+                          href={loreResult.metadata.sourceCategory}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline decoration-emerald-200/40 underline-offset-2 hover:text-white"
+                        >
+                          Wiki audio category
+                        </a>
+                      ) : null}{" "}
+                      · Canon: {loreResult.interaction.canonStatus.replace(/_/g, " ")}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -847,7 +1384,7 @@ export default function HomePage() {
                         <CopyButton value={editableScript} />
                         <button
                           type="button"
-                          onClick={() => setEditableScript(loreResult.script)}
+                          onClick={() => setEditableScript(loreResult.script.fullScript)}
                           className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-violet-200/50 hover:text-white"
                         >
                           Reset to Generated Script
@@ -865,16 +1402,41 @@ export default function HomePage() {
 
                   <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
                     <div className="mb-4">
-                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction</p>
-                      <h3 className="mt-1 text-xl font-bold text-white">{loreResult.interaction.speaker} says</h3>
+                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction found</p>
+                      <h3 className="mt-1 text-xl font-bold text-white">Champion speaking: {loreResult.interaction.speaker || "—"}</h3>
                     </div>
                     <blockquote className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-lg font-semibold leading-8 text-cyan-50">
-                      &ldquo;{loreResult.interaction.quote}&rdquo;
+                      &ldquo;{loreResult.interaction.quote || "—"}&rdquo;
                     </blockquote>
                     <div className="mt-4 grid gap-3 text-sm text-slate-300">
-                      <p><span className="font-bold text-white">To:</span> {loreResult.interaction.target}</p>
-                      <p><span className="font-bold text-white">Source:</span> {loreResult.interaction.sourceType}</p>
-                      <p><span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus}</p>
+                      <p>
+                        <span className="font-bold text-white">Target:</span> {loreResult.interaction.target || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Interaction type:</span>{" "}
+                        {loreResult.interaction.interactionType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source type:</span> {loreResult.interaction.sourceType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source:</span>{" "}
+                        {loreResult.interaction.sourceReference?.startsWith("http") ? (
+                          <a
+                            href={loreResult.interaction.sourceReference}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-200 underline decoration-cyan-400/30 underline-offset-2 hover:text-white"
+                          >
+                            {loreResult.interaction.sourceReference}
+                          </a>
+                        ) : (
+                          loreResult.interaction.sourceReference || "—"
+                        )}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus.replace(/_/g, " ")}
+                      </p>
                     </div>
                   </section>
 
@@ -1014,24 +1576,22 @@ export default function HomePage() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
-                  <QualityReportCard report={loreResult.qualityReport} qualityNote={loreResult.qualityNote} />
-                  <TextResultCard title="Viral title" value={loreResult.title} />
-                  <TextResultCard title="Short hook" value={loreResult.hook} />
-                  <TextResultCard title="Canon Context" value={loreResult.canonContext} multiline />
-                  <TextResultCard title="What It Reveals" value={loreResult.whatItReveals} multiline />
-                  <TextResultCard title="Important Canon Limit" value={loreResult.importantCanonLimit} multiline />
-                  <TextResultCard title="TikTok Script 45-60s" value={loreResult.tiktokScript} multiline />
-                  <ListResultCard title="Hook variants" items={loreResult.hookVariants} />
-                  <ListResultCard title="Alternate titles" items={loreResult.alternateTitles} />
-                  <RetentionBreakdownCard items={loreResult.retentionBreakdown} />
-                  <LoreAccuracyNotesCard items={loreResult.loreAccuracyNotes} />
-                  <ListResultCard title="Caption-friendly version" items={loreResult.captionVersion} />
-                  <VisualBeatsCard beats={loreResult.visualBeats} />
-                  <TextResultCard title="TikTok description" value={loreResult.tiktokDescription} />
-                  <TextResultCard title="Instagram caption" value={loreResult.instagramCaption} />
-                  <TextResultCard title="YouTube Shorts title" value={loreResult.youtubeShortsTitle} />
-                  <ListResultCard title="Hashtags" items={loreResult.hashtags} />
-                  <TextResultCard title="Pinned comment question" value={loreResult.pinnedComment} />
+                  <TextResultCard title="Short hook" value={loreResult.script.hook} />
+                  <TextResultCard title="Caption" value={loreResult.script.caption} multiline />
+                  <TextResultCard title="Full script (generated)" value={loreResult.script.fullScript} multiline />
+                  <ListResultCard title="Hashtags" items={loreResult.script.hashtags.length ? loreResult.script.hashtags : ["(none)"]} />
+                  <ListResultCard
+                    title="Canon explanation — confirmed facts"
+                    items={loreResult.canonResearch.confirmedFacts.length ? loreResult.canonResearch.confirmedFacts : ["(none)"]}
+                  />
+                  <ListResultCard
+                    title="Canon explanation — what the line suggests"
+                    items={loreResult.canonResearch.lineSuggests.length ? loreResult.canonResearch.lineSuggests : ["(none)"]}
+                  />
+                  <ListResultCard
+                    title="Canon explanation — what is not confirmed"
+                    items={loreResult.canonResearch.notConfirmed.length ? loreResult.canonResearch.notConfirmed : ["(none)"]}
+                  />
                 </div>
               </div>
             ) : (
@@ -1399,251 +1959,6 @@ function ListResultCard({ title, items }: { title: string; items: string[] }) {
         ))}
       </ul>
     </article>
-  );
-}
-
-function VisualBeatsCard({ beats }: { beats: LorePack["visualBeats"] }) {
-  const value = beats.map((beat) => `${beat.beat}: ${beat.visualSuggestion}`).join("\n");
-
-  return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-bold text-white">Suggested visual beats</h3>
-        <CopyButton value={value} />
-      </div>
-      <div className="space-y-3">
-        {beats.map((beat) => (
-          <div key={`${beat.beat}-${beat.visualSuggestion}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-cyan-100">{beat.beat}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">{beat.visualSuggestion}</p>
-          </div>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function TextInputField({
-  label,
-  value,
-  onChange,
-  placeholder,
-  type = "text",
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-  type?: string;
-}) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-bold text-slate-200">{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/60 focus:ring-4 focus:ring-cyan-300/10"
-      />
-    </label>
-  );
-}
-
-function DecimalSliderField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between gap-4">
-        <label className="text-sm font-bold text-slate-200">{label}</label>
-        <span className="rounded-full bg-white/[0.06] px-3 py-1 text-sm font-semibold text-violet-100">
-          {value.toFixed(2)}
-        </span>
-      </div>
-      <input
-        type="range"
-        min={0}
-        max={1}
-        step={0.01}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-        className="w-full accent-violet-300"
-      />
-    </div>
-  );
-}
-
-function ToggleField({
-  label,
-  checked,
-  onChange,
-}: {
-  label: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => onChange(!checked)}
-      className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/[0.035] px-4 py-3 text-left"
-    >
-      <span className="text-sm font-bold text-slate-200">{label}</span>
-      <span className={`rounded-full px-3 py-1 text-xs font-black ${checked ? "bg-emerald-300/15 text-emerald-100" : "bg-white/[0.06] text-slate-400"}`}>
-        {checked ? "On" : "Off"}
-      </span>
-    </button>
-  );
-}
-
-function AudioOutputCard({
-  title,
-  url,
-  emptyText,
-  downloadName,
-}: {
-  title: string;
-  url: string;
-  emptyText: string;
-  downloadName: string;
-}) {
-  return (
-    <article className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <h3 className="font-bold text-white">{title}</h3>
-        {url ? (
-          <a
-            href={url}
-            download={downloadName}
-            className="rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 text-xs font-bold text-slate-200 transition hover:border-cyan-200/50 hover:text-white"
-          >
-            Download
-          </a>
-        ) : null}
-      </div>
-      {url ? (
-        <audio controls src={url} className="w-full" />
-      ) : (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-500">{emptyText}</div>
-      )}
-    </article>
-  );
-}
-
-function RetentionBreakdownCard({ items }: { items: LorePack["retentionBreakdown"] }) {
-  const value = items.map((item) => `${item.moment}: ${item.purpose}\n${item.text}`).join("\n\n");
-
-  return (
-    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Retention Breakdown</span>
-        <CopyButton value={value} />
-      </summary>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        {items.map((item) => (
-          <div key={`${item.moment}-${item.text}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-violet-100">{item.moment}</p>
-            <p className="mt-1 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">{item.purpose}</p>
-            <p className="mt-2 text-sm leading-6 text-slate-300">{item.text}</p>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function LoreAccuracyNotesCard({ items }: { items: LorePack["loreAccuracyNotes"] }) {
-  const value = items.map((item) => `${item.fact}: ${item.whyItMatters}`).join("\n");
-
-  return (
-    <details className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Lore Accuracy Notes</span>
-        <CopyButton value={value} />
-      </summary>
-      <div className="mt-4 space-y-3">
-        {items.map((item) => (
-          <div key={`${item.fact}-${item.whyItMatters}`} className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="text-sm font-bold text-cyan-100">{item.fact}</p>
-            <p className="mt-1 text-sm leading-6 text-slate-300">{item.whyItMatters}</p>
-          </div>
-        ))}
-      </div>
-    </details>
-  );
-}
-
-function QualityReportCard({
-  report,
-  qualityNote,
-}: {
-  report?: NonNullable<LorePack["qualityReport"]>;
-  qualityNote?: string;
-}) {
-  if (!report) {
-    return null;
-  }
-
-  const statusColor = report.passed ? "text-emerald-100" : "text-amber-100";
-
-  return (
-    <details open className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
-      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
-        <span>Quality Report</span>
-        <span className={`rounded-full bg-white/[0.06] px-3 py-1 text-sm ${statusColor}`}>
-          {report.score}/100
-        </span>
-      </summary>
-      <div className="mt-4 space-y-4 text-sm">
-        {qualityNote ? (
-          <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-3 text-amber-100">
-            {qualityNote}
-          </div>
-        ) : null}
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="font-bold text-cyan-100">Word count</p>
-            <p className="mt-1 text-slate-300">
-              {report.wordCount} words / target {report.targetWordRange}
-            </p>
-          </div>
-          <div className="rounded-2xl bg-white/[0.035] p-3">
-            <p className="font-bold text-cyan-100">Status</p>
-            <p className="mt-1 text-slate-300">{report.passed ? "Ready to record" : "Review suggested"}</p>
-          </div>
-        </div>
-        <ListResultCard title="Quality strengths" items={report.strengths} />
-        {report.warnings.length > 0 ? <ListResultCard title="Quality warnings" items={report.warnings} /> : null}
-      </div>
-    </details>
-  );
-}
-
-function DownloadButton({ label, fileName, content, mimeType }: { label: string; fileName: string; content: string; mimeType: string }) {
-  const href = useMemo(() => {
-    const blob = new Blob([content], { type: mimeType });
-    return URL.createObjectURL(blob);
-  }, [content, mimeType]);
-
-  useEffect(() => {
-    return () => URL.revokeObjectURL(href);
-  }, [href]);
-
-  return (
-    <a
-      href={href}
-      download={fileName}
-      className="rounded-2xl border border-white/10 bg-white/[0.06] px-4 py-3 text-center text-sm font-bold text-white transition hover:border-cyan-200/50 hover:bg-cyan-300/10"
-    >
-      {label}
-    </a>
   );
 }
 
