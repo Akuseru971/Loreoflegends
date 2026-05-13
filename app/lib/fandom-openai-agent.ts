@@ -399,6 +399,19 @@ export async function extractWrittenInteractionsWithOpenAI(
   if (!openAiFandomInteractionAgentEnabled()) {
     return [];
   }
+  return extractWrittenInteractionsForFindPipeline(championName, audioPageUrl, pageText);
+}
+
+/**
+ * Same extraction prompt/schema as {@link extractWrittenInteractionsWithOpenAI}, but ignores
+ * `LOL_FANDOM_OPENAI_AGENT`. Used by `POST /api/find-champion-interactions` so discovery still works
+ * when the standalone agent flag is off.
+ */
+export async function extractWrittenInteractionsForFindPipeline(
+  championName: string,
+  audioPageUrl: string,
+  pageText: string,
+): Promise<RawWrittenInteractionFromPage[]> {
   const client = openaiClient();
   if (!client) {
     return [];
