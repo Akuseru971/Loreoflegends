@@ -27,7 +27,7 @@ export function fandomHtmlToSearchPlainText(html: string, maxChars?: number): st
 
 const WIKI_API = "https://leagueoflegends.fandom.com/api.php";
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; LoreoflegendsInteractionExplainer/1.0; +https://github.com/Akuseru971/Loreoflegends; Fandom parse read-only)";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 (Loreoflegends; Fandom parse read-only)";
 
 export async function fetchFandomParsedHtml(pageTitle: string): Promise<string | null> {
   try {
@@ -38,7 +38,11 @@ export async function fetchFandomParsedHtml(pageTitle: string): Promise<string |
     url.searchParams.set("page", pageTitle);
     url.searchParams.set("prop", "text");
     const response = await fetch(url.toString(), {
-      headers: { "User-Agent": USER_AGENT },
+      headers: {
+        "User-Agent": USER_AGENT,
+        Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+        Referer: "https://leagueoflegends.fandom.com/",
+      },
       signal: AbortSignal.timeout(25_000),
       next: { revalidate: 86_400 },
     });

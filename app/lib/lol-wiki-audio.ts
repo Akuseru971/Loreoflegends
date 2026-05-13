@@ -8,7 +8,7 @@
 
 const WIKI_API = "https://leagueoflegends.fandom.com/api.php";
 const USER_AGENT =
-  "Mozilla/5.0 (compatible; LoreoflegendsInteractionExplainer/1.0; +https://github.com/Akuseru971/Loreoflegends; Fandom API read-only)";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 (Loreoflegends; Fandom API read-only)";
 
 /** Human-readable index; API uses the same category title on the fandom.org host. */
 export const LOL_WIKI_AUDIO_CATEGORY_URL =
@@ -85,7 +85,11 @@ async function wikiGet(params: Record<string, string>): Promise<unknown> {
     url.searchParams.set(k, v);
   }
   const response = await fetch(url.toString(), {
-    headers: { "User-Agent": USER_AGENT },
+    headers: {
+      "User-Agent": USER_AGENT,
+      Accept: "application/json,text/plain;q=0.9,*/*;q=0.8",
+      Referer: "https://leagueoflegends.fandom.com/",
+    },
     signal: AbortSignal.timeout(20_000),
     next: { revalidate: 86_400 },
   });

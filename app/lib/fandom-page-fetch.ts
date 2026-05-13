@@ -13,8 +13,9 @@ import {
 
 const FANDOM_ORIGIN = "https://leagueoflegends.fandom.com";
 
+/** Browser-like UA: some Fandom edges return 403 to non-browser or custom-bot user agents. */
 const DEFAULT_USER_AGENT =
-  "Mozilla/5.0 LeagueInteractionExplorer/1.0 (compatible; +https://github.com/Akuseru971/Loreoflegends; Fandom read-only)";
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 const LOG_PREFIX = "[fandom-page-fetch]";
 
@@ -30,21 +31,40 @@ export type FetchFandomPageResult = {
   error?: string;
 };
 
-/**
- * Server-side GET of a Fandom URL with redirects followed.
- */
-export async function fetchFandomPage(url: string): Promise<FetchFandomPageResult> {
-  const ua = process.env.FANDOM_FETCH_USER_AGENT?.trim() || DEFAULT_USER_AGENT;
+function parseRetryCount(): number {
+  const raw = process.env.FANDOM_FETCH_RETRIES?.trim();
+  const n = raw ? Number.parseInt(raw, 10) : 4;
+  if (!Number.isFinite(n)) {
+    return 4;
+  }
+  return Math.min(8, Math.max(1, n));
+}
+
+function shouldRetryFandomFetch(prev: FetchFandomPageResult, attempt: number, maxAttempts: number): boolean {
+  if (attempt >= maxAttempts) {
+    return false;
+  }
+  if (prev.status === 0 && prev.error) {
+    return true;
+  }
+  const st = prev.status;
+  return st === 403 || st === 408 || st === 425 || st === 429 || st === 500 || st === 502 || st === 503 || st === 504;
+}
+
+async function fetchFandomPageOnce(url: string, ua: string): Promise<FetchFandomPageResult> {
   try {
     const response = await fetch(url, {
       method: "GET",
       headers: {
         "User-Agent": ua,
-        Accept: "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
+        Referer: "https://leagueoflegends.fandom.com/",
+        "Cache-Control": "no-cache",
+        "Upgrade-Insecure-Requests": "1",
       },
       redirect: "follow",
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(45_000),
     });
     const html = await response.text();
     const finalUrl = response.url || url;
@@ -61,6 +81,29 @@ export async function fetchFandomPage(url: string): Promise<FetchFandomPageResul
     log("fetch_error", { url, message });
     return { ok: false, status: 0, html: "", finalUrl: url, error: message };
   }
+}
+
+/**
+ * Server-side GET of a Fandom URL with redirects followed and limited retries on transient failures.
+ */
+export async function fetchFandomPage(url: string): Promise<FetchFandomPageResult> {
+  const ua = process.env.FANDOM_FETCH_USER_AGENT?.trim() || DEFAULT_USER_AGENT;
+  const maxAttempts = parseRetryCount();
+  let last: FetchFandomPageResult = { ok: false, status: 0, html: "", finalUrl: url, error: "fetch not started" };
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    last = await fetchFandomPageOnce(url, ua);
+    if (last.ok && last.html.length > 0) {
+      return last;
+    }
+    if (!shouldRetryFandomFetch(last, attempt, maxAttempts)) {
+      return last;
+    }
+    const delayMs = Math.min(8000, 500 * 2 ** (attempt - 1));
+    log("fetch_retry_scheduled", { url, attempt, maxAttempts, delayMs, status: last.status, err: last.error });
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return last;
 }
 
 export type ChampionAudioLink = {
