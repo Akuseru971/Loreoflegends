@@ -137,6 +137,22 @@ export async function extractChampionAudioPageLinksFromCategory(): Promise<strin
   return titles;
 }
 
+/** MediaWiki 1.32+ returns wikitext under revisions[0].slots.main["*"]; older wikis used revisions[0]["*"]. */
+export function wikitextFromMediaWikiRevision(rev: {
+  "*"?: string;
+  slots?: { main?: { "*": string } };
+}): string | null {
+  const fromSlot = rev.slots?.main?.["*"];
+  if (typeof fromSlot === "string" && fromSlot.length > 0) {
+    return fromSlot;
+  }
+  const legacy = rev["*"];
+  if (typeof legacy === "string" && legacy.length > 0) {
+    return legacy;
+  }
+  return null;
+}
+
 export async function getChampionLoLAudioWikitext(pageTitle: string): Promise<string | null> {
   try {
     const data = (await wikiGet({
@@ -147,13 +163,15 @@ export async function getChampionLoLAudioWikitext(pageTitle: string): Promise<st
       rvprop: "content",
       rvslots: "main",
     })) as {
-      query?: { pages?: Record<string, { missing?: true; revisions?: { "*": string }[] }> };
+      query?: {
+        pages?: Record<string, { missing?: true; revisions?: { "*"?: string; slots?: { main?: { "*": string } } }[] }>;
+      };
     };
     const page = Object.values(data.query?.pages ?? {})[0];
     if (!page || page.missing || !page.revisions?.[0]) {
       return null;
     }
-    return page.revisions[0]["*"] ?? null;
+    return wikitextFromMediaWikiRevision(page.revisions[0]);
   } catch {
     return null;
   }
@@ -173,7 +191,12 @@ export async function fetchWikitextBatch(titles: string[]): Promise<Map<string, 
         rvprop: "content",
         rvslots: "main",
       })) as {
-        query?: { pages?: Record<string, { title?: string; missing?: true; revisions?: { "*": string }[] }> };
+        query?: {
+          pages?: Record<
+            string,
+            { title?: string; missing?: true; revisions?: { "*"?: string; slots?: { main?: { "*": string } } }[] }
+          >;
+        };
       };
       const pages = data.query?.pages ?? {};
       for (const p of Object.values(pages)) {
@@ -184,7 +207,7 @@ export async function fetchWikitextBatch(titles: string[]): Promise<Map<string, 
         if (p.missing || !p.revisions?.[0]) {
           out.set(t, null);
         } else {
-          out.set(t, p.revisions[0]["*"] ?? null);
+          out.set(t, wikitextFromMediaWikiRevision(p.revisions[0]));
         }
       }
     } catch {
@@ -246,6 +269,10 @@ function headerSupportsDirectedChampionLine(headerLine: string): boolean {
 }
 
 function deriveInteractionType(headerLine: string, wikiSection: string): string {
+  const sec = wikiSection.toLowerCase();
+  if (sec.includes("first move")) {
+    return "First move (enemy champion)";
+  }
   const h = headerLine.toLowerCase();
   if (h.includes("upon first encounter") || h.includes("first encounter")) {
     return "First encounter";
@@ -293,12 +320,33 @@ function extractQuotedVoiceFromBullet(line: string): string | null {
     }
   }
 
+  /** Fandom wikitext sometimes omits the closing `"` before `''` (e.g. `''"…Vastaya.''`). */
+  const unbalanced = line.match(/''"([^']{10,420})''/);
+  if (unbalanced) {
+    const inner = unbalanced[1].trim();
+    if (/[A-Za-zÀ-ÿ0-9]/.test(inner) && !inner.includes("{{")) {
+      return inner;
+    }
+  }
+
   return null;
 }
 
 function pageSpeakerFromTitle(pageTitle: string): string {
   const base = pageTitle.replace(/\/LoL\/Audio$/i, "").replace(/\/Audio$/i, "");
   return base.replace(/_/g, " ");
+}
+
+function isCiOnlyTargetsLine(line: string): boolean {
+  const t = line.trim();
+  if (!t || t.startsWith("*") || t.startsWith(";")) {
+    return false;
+  }
+  if (!t.includes("{{ci|")) {
+    return false;
+  }
+  const stripped = t.replace(/\{\{ci\|[^}]+\}\}/g, "").replace(/\s+/g, "").trim();
+  return stripped.length === 0;
 }
 
 /**
@@ -308,15 +356,19 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
   const speaker = pageSpeakerFromTitle(pageTitle);
   const out: WikiVoiceInteraction[] = [];
   let currentSection = "Intro";
+  let currentSubSection = "";
   let pendingHeader: string | null = null;
+  let pendingCiOnlyLine: string | null = null;
 
   const lines = wikitext.split(/\r?\n/);
+
+  const wikiSectionLabel = () => (currentSubSection ? `${currentSection} › ${currentSubSection}` : currentSection);
 
   const pushRows = (header: string, quote: string, targets: string[]) => {
     if (!quote || targets.length === 0) {
       return;
     }
-    const interactionType = deriveInteractionType(header, currentSection);
+    const interactionType = deriveInteractionType(header, wikiSectionLabel());
     const skin = isSkinContextLine(header) || isSkinContextLine(quote);
     for (const target of targets) {
       out.push({
@@ -324,7 +376,7 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
         target,
         quote,
         interactionType,
-        wikiSection: currentSection,
+        wikiSection: wikiSectionLabel(),
         wikiPageTitle: pageTitle,
         sourceUrl: wikiFandomArticleUrl(pageTitle),
         headerLine: header,
@@ -337,11 +389,22 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
     const sectionMatch = line.match(/^==\s*([^=]+?)\s*==\s*$/);
     if (sectionMatch) {
       currentSection = sectionMatch[1].trim();
+      currentSubSection = "";
       pendingHeader = null;
+      pendingCiOnlyLine = null;
+      continue;
+    }
+
+    const subMatch = line.match(/^\s*={3,}\s*([^=]+?)\s*={3,}\s*$/);
+    if (subMatch) {
+      currentSubSection = subMatch[1].trim();
+      pendingHeader = null;
+      pendingCiOnlyLine = null;
       continue;
     }
 
     if (/^\s*;\s/.test(line)) {
+      pendingCiOnlyLine = null;
       if (headerSupportsDirectedChampionLine(line)) {
         pendingHeader = line.trim();
       } else {
@@ -350,13 +413,18 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
       continue;
     }
 
-    if (pendingHeader && /^\s*\*\s/.test(line) && line.includes("{{sm2")) {
-      const targets = extractCiNamesFromLine(pendingHeader, speaker);
+    if (isCiOnlyTargetsLine(line)) {
+      pendingCiOnlyLine = line.trim();
+      continue;
+    }
+
+    const effectiveHeader = pendingHeader ?? pendingCiOnlyLine;
+    if (effectiveHeader && /^\s*\*\s/.test(line) && line.includes("{{sm2")) {
+      const targets = extractCiNamesFromLine(effectiveHeader, speaker);
       const quote = extractQuotedVoiceFromBullet(line);
-      if (quote) {
-        pushRows(pendingHeader, quote, targets);
+      if (quote && targets.length > 0) {
+        pushRows(effectiveHeader, quote, targets);
       }
-      pendingHeader = null;
       continue;
     }
 
@@ -364,7 +432,7 @@ export function parseWikiVoiceInteractions(wikitext: string, pageTitle: string):
       const inlineTargets = extractCiNamesFromLine(line, speaker);
       const quote = extractQuotedVoiceFromBullet(line);
       if (quote && inlineTargets.length > 0) {
-        pushRows(`(inline in ${currentSection})`, quote, inlineTargets);
+        pushRows(`(inline in ${wikiSectionLabel()})`, quote, inlineTargets);
       }
     }
   }

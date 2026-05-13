@@ -237,7 +237,7 @@ export async function getChampionInteractionsBundle(
       total: all.length,
     },
     extractionNote:
-      "Written lines are parsed from Fandom MediaWiki wikitext (same text as the public article). No .ogg/.mp3/.wav files are downloaded or analyzed.",
+      "Interactions are read from Fandom wikitext via the MediaWiki API (revision slots). The previous bug that read an empty revision field is fixed, so champion-to-champion lines resolve again. No audio files are downloaded.",
   };
 }
 
