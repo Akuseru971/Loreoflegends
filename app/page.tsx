@@ -26,8 +26,7 @@ const EXPLORER_LOADING_STAGES = [
 
 const EXPLORER_SUCCESS_LINE = "Interactions found.";
 
-/** Fixed preferences for lore generation (no UI — same defaults as before). */
-const DEFAULT_LORE_CONTENT_TYPE = "Voice Line";
+/** Fixed preferences for interactions/explain (no UI). */
 const DEFAULT_LORE_TONE = "Mysterious";
 const DEFAULT_LORE_PLATFORM = "TikTok";
 const DEFAULT_LORE_DURATION: "45s" | "60s" = "60s";
@@ -36,10 +35,8 @@ const DEFAULT_NARRATIVE_ANGLE = "Relationship";
 const DEFAULT_AUDIENCE_LEVEL = "Casual player";
 const DEFAULT_CREATOR_GOAL = "Teach clearly";
 
-const sourceTypes = ["Unknown / Let AI assess", "Base champion voice line", "Skin voice line", "Legends of Runeterra", "Wild Rift", "Cinematic", "Riot Universe story", "Old / legacy lore"] as const;
 const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"] as const;
 
-type SourceType = (typeof sourceTypes)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
 
 const MAX_FILE_SIZE = 25 * 1024 * 1024;
@@ -242,11 +239,6 @@ export default function HomePage() {
   const [notice, setNotice] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [loreTopic, setLoreTopic] = useState("");
-  const [interactionQuote, setInteractionQuote] = useState("");
-  const [speakerChampion, setSpeakerChampion] = useState("");
-  const [targetChampion, setTargetChampion] = useState("");
-  const [sourceType, setSourceType] = useState<SourceType>("Unknown / Let AI assess");
   const [loreResult, setLoreResult] = useState<LoLInteractionExplainerResponse | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
@@ -278,7 +270,6 @@ export default function HomePage() {
   const [explorerCategoryUrl, setExplorerCategoryUrl] = useState("");
   const [explorerChampionsLoading, setExplorerChampionsLoading] = useState(true);
   const [explorerChampionsError, setExplorerChampionsError] = useState("");
-  const [explorerChampionQuery, setExplorerChampionQuery] = useState("");
   const [selectedExplorerSlug, setSelectedExplorerSlug] = useState("");
   const [explorerInteractions, setExplorerInteractions] = useState<ExplorerInteractionsResponse | null>(null);
   const [explorerInteractionsLoading, setExplorerInteractionsLoading] = useState(false);
@@ -420,18 +411,6 @@ export default function HomePage() {
     };
   }, [selectedExplorerSlug]);
 
-  const explorerChampionOptions = useMemo(() => {
-    const q = explorerChampionQuery.trim().toLowerCase();
-    if (!q) {
-      return explorerChampions;
-    }
-    return explorerChampions.filter(
-      (c) =>
-        c.name.toLowerCase().includes(q) ||
-        wikiPageTitleFromAudioPageUrl(c.audioPageUrl).toLowerCase().includes(q.replace(/\s+/g, "_").toLowerCase()),
-    );
-  }, [explorerChampions, explorerChampionQuery]);
-
   const explorerFilteredRows = useMemo(() => {
     if (!explorerInteractions) {
       return [];
@@ -526,109 +505,6 @@ export default function HomePage() {
     event.preventDefault();
     setIsDragging(false);
     selectFile(event.dataTransfer.files?.[0] ?? null);
-  }
-
-  async function submitLoreRequest(body: Record<string, unknown>) {
-    try {
-      const response = await fetch("/api/generate-lol-lore", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const rawText = await response.text();
-      if (process.env.NODE_ENV === "development") {
-        console.log("[lore client] response status", response.status);
-        console.log("[lore client] raw body", rawText);
-      }
-
-      let parsed: unknown = null;
-      try {
-        parsed = rawText.trim() ? JSON.parse(rawText) : null;
-      } catch (parseErr) {
-        console.error("[lore client] JSON.parse failed", parseErr);
-        console.error("[lore client] raw body (unparsed)", rawText);
-        parsed = null;
-      }
-
-      const langCode = uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE);
-      const durationTarget = DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s";
-      const normalized = normalizeLoLInteractionResponse(parsed, {
-        language: langCode,
-        durationTarget,
-      });
-
-      if (!response.ok) {
-        console.error("[lore client] non-OK HTTP status", response.status, rawText);
-      }
-
-      setLoreResult(normalized);
-      setEditableScript(normalized.script.fullScript);
-      setLoreError("");
-      setVoiceError("");
-      setVoiceNotice("");
-      if (rawAudioUrl) {
-        URL.revokeObjectURL(rawAudioUrl);
-        setRawAudioUrl("");
-      }
-      if (cleanedGeneratedAudioUrl) {
-        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
-        setCleanedGeneratedAudioUrl("");
-      }
-      setRawAudioBlob(null);
-    } catch (submitError) {
-      console.error("[lore client] fetch failed", submitError);
-      const fallback = normalizeLoLInteractionResponse(null, {
-        language: uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE),
-        durationTarget: DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s",
-      });
-      const msg = submitError instanceof Error ? submitError.message : "Network error while generating lore.";
-      fallback.canonResearch.notConfirmed = [msg, ...fallback.canonResearch.notConfirmed];
-      fallback.script.title = "Connection or network issue";
-      setLoreResult(fallback);
-      setEditableScript(fallback.script.fullScript);
-      setLoreError("");
-    }
-  }
-
-  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
-    event.preventDefault();
-    setLoreError("");
-
-    if (
-      generationMode === "custom" &&
-      !loreTopic.trim() &&
-      !interactionQuote.trim() &&
-      !speakerChampion.trim() &&
-      !targetChampion.trim()
-    ) {
-      setLoreError("Enter a champion name, topic, or quote before generating.");
-      return;
-    }
-
-    setIsLoreGenerating(true);
-    try {
-      await submitLoreRequest({
-        contentType: DEFAULT_LORE_CONTENT_TYPE,
-        topic: loreTopic,
-        quote: interactionQuote,
-        speaker: speakerChampion,
-        target: targetChampion,
-        sourceType,
-        tone: DEFAULT_LORE_TONE,
-        platform: DEFAULT_LORE_PLATFORM,
-        duration: DEFAULT_LORE_DURATION,
-        language: DEFAULT_LORE_LANGUAGE,
-        narrativeAngle: DEFAULT_NARRATIVE_ANGLE,
-        audienceLevel: DEFAULT_AUDIENCE_LEVEL,
-        creatorGoal: DEFAULT_CREATOR_GOAL,
-        mode: generationMode,
-      });
-    } finally {
-      setIsLoreGenerating(false);
-    }
   }
 
   async function handleExplainExplorerLine(row: ExplorerWrittenInteraction) {
@@ -908,8 +784,7 @@ export default function HomePage() {
 
         <section className="rounded-[2.25rem] border border-violet-200/15 bg-violet-300/[0.035] p-5 shadow-2xl shadow-black/30 backdrop-blur-xl">
           <div className="rounded-[1.75rem] border border-white/10 bg-slate-950/70 p-6 sm:p-8">
-            <div className="grid gap-8 lg:grid-cols-[0.95fr_1.05fr]">
-              <div className="space-y-6">
+            <div className="space-y-6">
                 <div className="inline-flex rounded-full border border-violet-300/20 bg-violet-300/10 px-4 py-2 text-sm font-medium text-violet-100">
                   Step 1 - League of Legends interaction explainer
                 </div>
@@ -918,10 +793,11 @@ export default function HomePage() {
                     LoL Interaction Explainer
                   </h1>
                   <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">
-                    Explain League of Legends champion interactions, voice lines, rivalries, family ties, and dialogue subtext with strict canon attribution.
+                    Pick a champion below, load their written Fandom audio lines, then tap Explain on any card for
+                    canon-backed lore and a short-form script anchored to that exact quote.
                   </p>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                    Two-step pipeline: discover a real champion-to-champion voice line (no invention), then lore + script anchored to that exact quote. If no high-confidence line is found, you get a clear “no verified line” response—no generic lore essay.
+                    No manual topic entry: lines come only from the wiki index and the champion page the server opens.
                   </p>
                 </div>
 
@@ -937,81 +813,6 @@ export default function HomePage() {
                     </div>
                   ))}
                 </div>
-              </div>
-
-              <form onSubmit={(event) => handleLoreSubmit(event, "custom")} className="rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-5">
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-200">Interaction or relationship to explain</span>
-                  <input
-                    value={loreTopic}
-                    onChange={(event) => setLoreTopic(event.target.value)}
-                    placeholder='Example: "Aatrox line to Pantheon", "Yasuo and Yone", "Vayne and Evelynn"'
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
-                  />
-                </label>
-
-                <label className="mt-4 block">
-                  <span className="mb-2 block text-sm font-bold text-slate-200">Exact quote, if you have it</span>
-                  <textarea
-                    value={interactionQuote}
-                    onChange={(event) => setInteractionQuote(event.target.value)}
-                    rows={3}
-                    placeholder='Paste the exact voice line here. The system will not invent a quote if this is empty.'
-                    className="w-full resize-y rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
-                  />
-                </label>
-
-                <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-bold text-slate-200">Speaker</span>
-                    <input
-                      value={speakerChampion}
-                      onChange={(event) => setSpeakerChampion(event.target.value)}
-                      placeholder="Aatrox, Swain, Vayne..."
-                      className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
-                    />
-                  </label>
-                  <label className="block">
-                    <span className="mb-2 block text-sm font-bold text-slate-200">Target</span>
-                    <input
-                      value={targetChampion}
-                      onChange={(event) => setTargetChampion(event.target.value)}
-                      placeholder="Target champion if known"
-                      className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-violet-200/60 focus:ring-4 focus:ring-violet-300/10"
-                    />
-                  </label>
-                  <SelectField
-                    label="Source"
-                    value={sourceType}
-                    onChange={(value) => setSourceType(value as SourceType)}
-                    options={sourceTypes}
-                  />
-                </div>
-
-                {loreError ? (
-                  <div className="mt-4 rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
-                    {loreError}
-                  </div>
-                ) : null}
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={(event) => handleLoreSubmit(event, "daily")}
-                    disabled={isLoreGenerating}
-                    className="rounded-2xl border border-violet-200/40 bg-violet-300/10 px-5 py-4 font-black text-violet-50 transition hover:bg-violet-300/15 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isLoreGenerating ? "Generating..." : "Analyze Today's Interaction"}
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isLoreGenerating}
-                    className="rounded-2xl bg-gradient-to-r from-violet-300 via-cyan-300 to-fuchsia-300 px-5 py-4 font-black text-slate-950 shadow-[0_18px_70px_rgba(168,85,247,0.22)] transition hover:scale-[1.01] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
-                  >
-                    {isLoreGenerating ? "Generating..." : "Analyze This Interaction"}
-                  </button>
-                </div>
-              </form>
             </div>
 
             <div className="mt-8 rounded-[1.5rem] border border-cyan-300/15 bg-slate-950/50 p-5 sm:p-6">
@@ -1052,44 +853,40 @@ export default function HomePage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-4 lg:grid-cols-2">
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-200">Search champion</span>
-                  <input
-                    value={explorerChampionQuery}
-                    onChange={(event) => setExplorerChampionQuery(event.target.value)}
-                    placeholder="Filter list (e.g. Swain, Jinx)…"
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/50"
-                  />
-                </label>
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-slate-200">Select champion</span>
-                  <select
-                    value={selectedExplorerSlug}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setSelectedExplorerSlug(next);
-                      if (!next) {
-                        setExplorerInteractions(null);
-                      }
-                      setExplorerFilterTarget("");
-                      setExplorerFilterType("");
-                      setExplorerFilterQuote("");
-                    }}
-                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-200/50"
-                  >
-                    <option value="">— Choose a champion —</option>
-                    {explorerChampionOptions.map((champion) => {
-                      const pageTitle = wikiPageTitleFromAudioPageUrl(champion.audioPageUrl);
-                      return (
-                        <option key={champion.audioPageUrl} value={pageTitle}>
-                          {champion.name}
-                        </option>
-                      );
-                    })}
-                  </select>
-                </label>
-              </div>
+              {loreError ? (
+                <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+                  {loreError}
+                </div>
+              ) : null}
+
+              <label className="block max-w-2xl">
+                <span className="mb-2 block text-sm font-bold text-slate-200">Select champion</span>
+                <select
+                  value={selectedExplorerSlug}
+                  onChange={(event) => {
+                    const next = event.target.value;
+                    setLoreError("");
+                    setSelectedExplorerSlug(next);
+                    if (!next) {
+                      setExplorerInteractions(null);
+                    }
+                    setExplorerFilterTarget("");
+                    setExplorerFilterType("");
+                    setExplorerFilterQuote("");
+                  }}
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-200/50"
+                >
+                  <option value="">— Choose a champion —</option>
+                  {explorerChampions.map((champion) => {
+                    const pageTitle = wikiPageTitleFromAudioPageUrl(champion.audioPageUrl);
+                    return (
+                      <option key={champion.audioPageUrl} value={pageTitle}>
+                        {champion.name}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
 
               {selectedExplorerSlug ? (
                 <div className="mt-6 space-y-4 border-t border-white/10 pt-6">
