@@ -7,6 +7,24 @@ import * as cheerio from "cheerio";
 import type { WikiVoiceInteraction } from "@/app/lib/lol-wiki-audio";
 import { pageSpeakerFromTitle, wikiFandomArticleUrl } from "@/app/lib/lol-wiki-audio";
 
+/**
+ * Visible text from parsed Fandom HTML (.mw-parser-output) for substring verification of quotes.
+ * Optional maxChars truncates for model context; use the full string for validation when possible.
+ */
+export function fandomHtmlToSearchPlainText(html: string, maxChars?: number): string {
+  if (!html?.trim()) {
+    return "";
+  }
+  const $ = cheerio.load(html);
+  const root = $(".mw-parser-output").first();
+  const text = root.length ? root.text() : $("body").text();
+  const collapsed = text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+  if (maxChars != null && maxChars > 0 && collapsed.length > maxChars) {
+    return collapsed.slice(0, maxChars);
+  }
+  return collapsed;
+}
+
 const WIKI_API = "https://leagueoflegends.fandom.com/api.php";
 const USER_AGENT =
   "Mozilla/5.0 (compatible; LoreoflegendsInteractionExplainer/1.0; +https://github.com/Akuseru971/Loreoflegends; Fandom parse read-only)";

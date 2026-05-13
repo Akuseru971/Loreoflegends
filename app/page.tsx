@@ -280,6 +280,8 @@ export default function HomePage() {
   type ExplorerInteractionsResponse = {
     selectedChampion: string;
     slug: string;
+    championAudioPageFound?: boolean;
+    sourceCategory?: string;
     audioPageUrl: string;
     spokenByChampion: ExplorerWrittenInteraction[];
     spokenToChampion: ExplorerWrittenInteraction[];

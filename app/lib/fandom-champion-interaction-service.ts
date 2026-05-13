@@ -4,7 +4,16 @@
  * No audio download, playback, or transcription.
  */
 
-import { extractWrittenInteractionsFromParsedHtml, fetchFandomParsedHtml } from "@/app/lib/fandom-audio-html";
+import OpenAI from "openai";
+import { extractWrittenInteractionsFromParsedHtml, fetchFandomParsedHtml, fandomHtmlToSearchPlainText } from "@/app/lib/fandom-audio-html";
+import {
+  canonicalFandomWikiUrl,
+  extractWrittenInteractionsWithOpenAI,
+  fandomAudioPageTitleFromWikiUrl,
+  findChampionAudioPageWithOpenAI,
+  openAiFandomInteractionAgentEnabled,
+  type RawWrittenInteractionFromPage,
+} from "@/app/lib/fandom-openai-agent";
 import {
   LOL_WIKI_AUDIO_CATEGORY_URL,
   championKeyToLoLAudioPageTitle,
@@ -115,6 +124,42 @@ function topSectionLabel(wikiSection: string): string {
   return s || "Intro";
 }
 
+function rawOpenAiToPayload(
+  r: RawWrittenInteractionFromPage,
+  sourceUrl: string,
+  sourcePageTitle: string,
+): WrittenInteractionPayload {
+  const skin = /skin/i.test(r.interactionType) || /skin/i.test(r.section);
+  return {
+    speaker: r.speaker,
+    target: r.target,
+    quote: r.quote,
+    interactionType: r.interactionType,
+    section: topSectionLabel(r.section),
+    sourceUrl,
+    sourcePageTitle,
+    sourceType: WRITTEN_INTERACTION_SOURCE_TYPE,
+    isSkinContext: skin,
+  };
+}
+
+function mergeWrittenPayloadRows(
+  primary: WrittenInteractionPayload[],
+  secondary: WrittenInteractionPayload[],
+): WrittenInteractionPayload[] {
+  const m = new Map<string, WrittenInteractionPayload>();
+  for (const r of primary) {
+    m.set(`${normk(r.speaker)}|${normk(r.target)}|${r.quote}`, r);
+  }
+  for (const r of secondary) {
+    const k = `${normk(r.speaker)}|${normk(r.target)}|${r.quote}`;
+    if (!m.has(k)) {
+      m.set(k, r);
+    }
+  }
+  return [...m.values()];
+}
+
 function toApiRow(r: WikiVoiceInteraction): WrittenInteractionPayload {
   return {
     speaker: r.speaker,
@@ -197,6 +242,8 @@ export async function getChampionInteractionsBundle(
 ): Promise<{
   selectedChampion: string;
   slug: string;
+  championAudioPageFound: boolean;
+  sourceCategory: string;
   audioPageUrl: string;
   spokenByChampion: WrittenInteractionPayload[];
   spokenToChampion: WrittenInteractionPayload[];
@@ -214,20 +261,80 @@ export async function getChampionInteractionsBundle(
   const championKey = toWikiChampionKey(raw.replace(/_/g, " "));
   const display = championKey.replace(/_/g, " ");
   const primaryTitle = championKeyToLoLAudioPageTitle(championKey);
+  const expectedUrl = wikiFandomArticleUrl(primaryTitle);
 
   if (options.refresh) {
     invalidateFandomInteractionCaches();
   }
 
   const allTitles = await extractChampionAudioPageLinksFromCategory();
-  await parseAndCacheLoLAudioPage(primaryTitle, !!options.refresh);
+  const championInCategory = allTitles.some((t) => t.toLowerCase() === primaryTitle.toLowerCase());
+  const allowedUrls = allTitles.map((t) => wikiFandomArticleUrl(t));
 
-  const primaryRows = pageCache.get(primaryTitle)?.rows ?? [];
+  let resolvedTitle = primaryTitle;
+  let resolvedUrl = expectedUrl;
+  let championAudioPageFound = championInCategory;
+
+  const useAgent = openAiFandomInteractionAgentEnabled();
+  let openAiSpokenBy: WrittenInteractionPayload[] = [];
+
+  if (useAgent) {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
+    const find = await findChampionAudioPageWithOpenAI(openai, display, championKey, allowedUrls);
+    let pickedOk = false;
+    if (find.found && find.audioPageUrl) {
+      const pickedTitle = fandomAudioPageTitleFromWikiUrl(find.audioPageUrl);
+      const canon = canonicalFandomWikiUrl(find.audioPageUrl);
+      if (pickedTitle && canon) {
+        resolvedTitle = pickedTitle;
+        resolvedUrl = canon;
+        pickedOk = true;
+      }
+    }
+    championAudioPageFound = championInCategory || pickedOk;
+    if (championInCategory && !pickedOk) {
+      resolvedTitle = primaryTitle;
+      resolvedUrl = expectedUrl;
+    }
+
+    if (!championAudioPageFound) {
+      return {
+        selectedChampion: display,
+        slug: championKey,
+        championAudioPageFound: false,
+        sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+        audioPageUrl: "",
+        spokenByChampion: [],
+        spokenToChampion: [],
+        allInteractions: [],
+        count: {
+          spokenByChampion: 0,
+          spokenToChampion: 0,
+          spokenByFirstEncounter: 0,
+          total: 0,
+        },
+        extractionNote:
+          "OpenAI was asked to resolve the champion audio URL strictly from Category:LoL_Champion_audio; no matching page was confirmed.",
+        error: "OpenAI could not find the champion audio page from the Fandom category.",
+      };
+    }
+
+    const html = await fetchFandomParsedHtml(resolvedTitle);
+    const plainFull = html ? fandomHtmlToSearchPlainText(html) : "";
+    if (plainFull.length > 400) {
+      const rawRows = await extractWrittenInteractionsWithOpenAI(openai, display, resolvedUrl, plainFull);
+      openAiSpokenBy = rawRows.map((r) => rawOpenAiToPayload(r, resolvedUrl, resolvedTitle));
+    }
+  }
+
+  await parseAndCacheLoLAudioPage(resolvedTitle, !!options.refresh);
+
+  const primaryRows = pageCache.get(resolvedTitle)?.rows ?? [];
   const relatedTitles: string[] = [];
   for (const r of primaryRows) {
     if (normk(r.speaker) === normk(display)) {
       const t = championKeyToLoLAudioPageTitle(toWikiChampionKey(r.target));
-      if (t.toLowerCase() !== primaryTitle.toLowerCase()) {
+      if (t.toLowerCase() !== resolvedTitle.toLowerCase()) {
         relatedTitles.push(t);
       }
     }
@@ -242,10 +349,11 @@ export async function getChampionInteractionsBundle(
     }
   }
 
-  await probePagesMentioningChampion(championKey, display, primaryTitle, allTitles);
+  await probePagesMentioningChampion(championKey, display, resolvedTitle, allTitles);
 
-  const refreshedPrimary = pageCache.get(primaryTitle)?.rows ?? [];
-  const spokenBy = refreshedPrimary.filter((r) => normk(r.speaker) === normk(display)).map(toApiRow);
+  const refreshedPrimary = pageCache.get(resolvedTitle)?.rows ?? [];
+  const spokenByDeterministic = refreshedPrimary.filter((r) => normk(r.speaker) === normk(display)).map(toApiRow);
+  const spokenBy = mergeWrittenPayloadRows(openAiSpokenBy, spokenByDeterministic);
   const spokenTo = (globalByTarget.get(normk(display)) ?? []).map(toApiRow);
 
   const merged = new Map<string, WrittenInteractionPayload>();
@@ -259,7 +367,9 @@ export async function getChampionInteractionsBundle(
   return {
     selectedChampion: display,
     slug: championKey,
-    audioPageUrl: wikiFandomArticleUrl(primaryTitle),
+    championAudioPageFound,
+    sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+    audioPageUrl: championAudioPageFound ? resolvedUrl : "",
     spokenByChampion: spokenBy,
     spokenToChampion: spokenTo,
     allInteractions: all,
@@ -270,10 +380,15 @@ export async function getChampionInteractionsBundle(
       total,
     },
     extractionNote:
-      "Written lines are parsed from Fandom rendered HTML (Cheerio on MediaWiki action=parse) and merged with wikitext for coverage. Audio <source> URLs are ignored for dialogue text. No .ogg playback or transcription.",
+      useAgent ?
+        "Discovery: OpenAI selects the champion /LoL/Audio URL only from the live Category:LoL_Champion_audio list; extraction reads server-fetched Fandom HTML as plain text and every quote is rejected unless it appears verbatim in that text. HTML+wikitext parsing is merged as a deterministic fallback. No audio download or transcription."
+      : "Written lines are parsed from Fandom rendered HTML (Cheerio on MediaWiki action=parse) and merged with wikitext for coverage. Audio <source> URLs are ignored for dialogue text. No .ogg playback or transcription.",
     ...(total === 0 ?
       {
-        error: "No verified written champion interactions found on the Fandom audio pages.",
+        error:
+          useAgent && championAudioPageFound ?
+            "No written champion interactions were found on the selected Fandom audio page."
+          : "No verified written champion interactions found on the Fandom audio pages.",
       }
     : {}),
   };
