@@ -643,7 +643,7 @@ export default function HomePage() {
                     Explain League of Legends champion interactions, voice lines, rivalries, family ties, and dialogue subtext with strict canon attribution.
                   </p>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-400">
-                    Built for a daily workflow: analyze the interaction, get a canon-safe TikTok script, send it to ElevenLabs, then clean the exported audio below.
+                    Two-step pipeline: discover a real champion-to-champion voice line (no invention), then lore + script anchored to that exact quote. If no high-confidence line is found, you get a clear “no verified line” response—no generic lore essay.
                   </p>
                 </div>
 
