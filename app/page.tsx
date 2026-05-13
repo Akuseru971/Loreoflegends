@@ -283,6 +283,15 @@ export default function HomePage() {
     championAudioPageFound?: boolean;
     sourceCategory?: string;
     audioPageUrl: string;
+    interactions?: {
+      speaker: string;
+      target: string;
+      quote: string;
+      interactionType: string;
+      section: string;
+      sourceUrl: string;
+    }[];
+    interactionCount?: number;
     spokenByChampion: ExplorerWrittenInteraction[];
     spokenToChampion: ExplorerWrittenInteraction[];
     allInteractions: ExplorerWrittenInteraction[];
