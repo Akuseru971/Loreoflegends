@@ -332,7 +332,7 @@ function extractQuotedVoiceFromBullet(line: string): string | null {
   return null;
 }
 
-function pageSpeakerFromTitle(pageTitle: string): string {
+export function pageSpeakerFromTitle(pageTitle: string): string {
   const base = pageTitle.replace(/\/LoL\/Audio$/i, "").replace(/\/Audio$/i, "");
   return base.replace(/_/g, " ");
 }

@@ -1,8 +1,10 @@
 /**
  * Live Fandom explorer: list champions from Category:LoL_Champion_audio, parse written
- * champion-to-champion lines from `Champion/LoL/Audio` wikitext (MediaWiki API). No audio I/O.
+ * champion-to-champion lines from Champion/LoL/Audio pages (HTML via Cheerio + wikitext merge).
+ * No audio download, playback, or transcription.
  */
 
+import { extractWrittenInteractionsFromParsedHtml, fetchFandomParsedHtml } from "@/app/lib/fandom-audio-html";
 import {
   LOL_WIKI_AUDIO_CATEGORY_URL,
   championKeyToLoLAudioPageTitle,
@@ -20,7 +22,6 @@ export const WRITTEN_INTERACTION_SOURCE_TYPE = "Written interaction from Fandom 
 
 export type ChampionListEntry = {
   name: string;
-  slug: string;
   audioPageUrl: string;
 };
 
@@ -31,6 +32,8 @@ export type WrittenInteractionPayload = {
   interactionType: string;
   section: string;
   sourceUrl: string;
+  /** MediaWiki page title, e.g. Viego/LoL/Audio */
+  sourcePageTitle: string;
   sourceType: typeof WRITTEN_INTERACTION_SOURCE_TYPE;
   isSkinContext: boolean;
 };
@@ -40,7 +43,21 @@ function normk(s: string): string {
 }
 
 function rowKey(r: WikiVoiceInteraction): string {
-  return `${normk(r.speaker)}|${normk(r.target)}|${r.quote}`;
+  return `${normk(r.speaker)}|${normk(r.target)}|${r.quote.replace(/\s+/g, " ").trim().toLowerCase()}`;
+}
+
+function mergeVoiceRows(primary: WikiVoiceInteraction[], secondary: WikiVoiceInteraction[]): WikiVoiceInteraction[] {
+  const m = new Map<string, WikiVoiceInteraction>();
+  for (const r of primary) {
+    m.set(rowKey(r), r);
+  }
+  for (const r of secondary) {
+    const k = rowKey(r);
+    if (!m.has(k)) {
+      m.set(k, r);
+    }
+  }
+  return [...m.values()];
 }
 
 const pageCache = new Map<string, { rows: WikiVoiceInteraction[]; exp: number }>();
@@ -80,15 +97,22 @@ export async function parseAndCacheLoLAudioPage(pageTitle: string, force = false
       return c.rows;
     }
   }
-  const wt = await getChampionLoLAudioWikitext(pageTitle);
-  if (!wt) {
+  const [html, wt] = await Promise.all([fetchFandomParsedHtml(pageTitle), getChampionLoLAudioWikitext(pageTitle)]);
+  const fromHtml = html ? extractWrittenInteractionsFromParsedHtml(html, pageTitle) : [];
+  const fromWt = wt ? parseWikiVoiceInteractions(wt, pageTitle) : [];
+  const rows = mergeVoiceRows(fromHtml, fromWt);
+  if (!html && !wt) {
     pageCache.set(pageTitle, { rows: [], exp: Date.now() + PAGE_TTL_MS });
     return [];
   }
-  const rows = parseWikiVoiceInteractions(wt, pageTitle);
   registerRows(rows);
   pageCache.set(pageTitle, { rows, exp: Date.now() + PAGE_TTL_MS });
   return rows;
+}
+
+function topSectionLabel(wikiSection: string): string {
+  const s = wikiSection.split("›")[0]?.trim() || wikiSection;
+  return s || "Intro";
 }
 
 function toApiRow(r: WikiVoiceInteraction): WrittenInteractionPayload {
@@ -97,8 +121,9 @@ function toApiRow(r: WikiVoiceInteraction): WrittenInteractionPayload {
     target: r.target,
     quote: r.quote,
     interactionType: r.interactionType,
-    section: r.wikiSection,
+    section: topSectionLabel(r.wikiSection),
     sourceUrl: r.sourceUrl,
+    sourcePageTitle: r.wikiPageTitle || r.sourceUrl.split("/wiki/").pop()?.split("#")[0]?.replace(/_/g, " ") || "",
     sourceType: WRITTEN_INTERACTION_SOURCE_TYPE,
     isSkinContext: r.isSkinContext,
   };
@@ -112,7 +137,7 @@ function hashString(s: string): number {
   return h;
 }
 
-const MAX_PROBE_PAGES = 40;
+const MAX_PROBE_PAGES = 72;
 
 async function probePagesMentioningChampion(
   championKey: string,
@@ -159,7 +184,6 @@ export async function getChampionListForApi(): Promise<{
       const displayName = key.replace(/_/g, " ");
       return {
         name: displayName,
-        slug: key,
         audioPageUrl: wikiFandomArticleUrl(t),
       };
     })
@@ -177,8 +201,14 @@ export async function getChampionInteractionsBundle(
   spokenByChampion: WrittenInteractionPayload[];
   spokenToChampion: WrittenInteractionPayload[];
   allInteractions: WrittenInteractionPayload[];
-  count: { spokenByChampion: number; spokenToChampion: number; total: number };
+  count: {
+    spokenByChampion: number;
+    spokenToChampion: number;
+    spokenByFirstEncounter: number;
+    total: number;
+  };
   extractionNote: string;
+  error?: string;
 }> {
   const raw = decodeURIComponent(championParam.trim());
   const championKey = toWikiChampionKey(raw.replace(/_/g, " "));
@@ -223,6 +253,8 @@ export async function getChampionInteractionsBundle(
     merged.set(`${normk(x.speaker)}|${normk(x.target)}|${x.quote}`, x);
   }
   const all = [...merged.values()].sort((a, b) => b.quote.length - a.quote.length);
+  const total = all.length;
+  const firstEnc = spokenBy.filter((x) => x.interactionType === "First Encounter");
 
   return {
     selectedChampion: display,
@@ -234,10 +266,16 @@ export async function getChampionInteractionsBundle(
     count: {
       spokenByChampion: spokenBy.length,
       spokenToChampion: spokenTo.length,
-      total: all.length,
+      spokenByFirstEncounter: firstEnc.length,
+      total,
     },
     extractionNote:
-      "Interactions are read from Fandom wikitext via the MediaWiki API (revision slots). The previous bug that read an empty revision field is fixed, so champion-to-champion lines resolve again. No audio files are downloaded.",
+      "Written lines are parsed from Fandom rendered HTML (Cheerio on MediaWiki action=parse) and merged with wikitext for coverage. Audio <source> URLs are ignored for dialogue text. No .ogg playback or transcription.",
+    ...(total === 0 ?
+      {
+        error: "No verified written champion interactions found on the Fandom audio pages.",
+      }
+    : {}),
   };
 }
 

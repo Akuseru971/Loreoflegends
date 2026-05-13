@@ -2,10 +2,20 @@
 
 import { ChangeEvent, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
+  LOL_INTERACTION_FORMAT_VERSION,
   normalizeLoLInteractionResponse,
   uiLanguageToMetadataCode,
   type LoLInteractionExplainerResponse,
 } from "@/app/lib/lol-interaction-explainer";
+import { LOL_WIKI_AUDIO_CATEGORY_URL } from "@/app/lib/lol-wiki-audio";
+
+function wikiPageTitleFromAudioPageUrl(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).pathname.replace(/^\/wiki\//, ""));
+  } catch {
+    return "";
+  }
+}
 
 const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
 const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
@@ -255,7 +265,7 @@ export default function HomePage() {
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
   const [editableScript, setEditableScript] = useState("");
 
-  type ExplorerChampion = { name: string; slug: string; audioPageUrl: string };
+  type ExplorerChampion = { name: string; audioPageUrl: string };
   type ExplorerWrittenInteraction = {
     speaker: string;
     target: string;
@@ -263,6 +273,7 @@ export default function HomePage() {
     interactionType: string;
     section: string;
     sourceUrl: string;
+    sourcePageTitle: string;
     sourceType: string;
     isSkinContext: boolean;
   };
@@ -273,8 +284,14 @@ export default function HomePage() {
     spokenByChampion: ExplorerWrittenInteraction[];
     spokenToChampion: ExplorerWrittenInteraction[];
     allInteractions: ExplorerWrittenInteraction[];
-    count: { spokenByChampion: number; spokenToChampion: number; total: number };
+    count: {
+      spokenByChampion: number;
+      spokenToChampion: number;
+      spokenByFirstEncounter?: number;
+      total: number;
+    };
     extractionNote?: string;
+    error?: string;
   };
 
   const [explorerChampions, setExplorerChampions] = useState<ExplorerChampion[]>([]);
@@ -414,7 +431,9 @@ export default function HomePage() {
       return explorerChampions;
     }
     return explorerChampions.filter(
-      (c) => c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q.replace(/\s+/g, "_")),
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        wikiPageTitleFromAudioPageUrl(c.audioPageUrl).toLowerCase().includes(q.replace(/\s+/g, "_").toLowerCase()),
     );
   }, [explorerChampions, explorerChampionQuery]);
 
@@ -621,22 +640,10 @@ export default function HomePage() {
     setLoreError("");
     setIsLoreGenerating(true);
     try {
-      await submitLoreRequest({
-        mode: "custom",
-        contentType: loreContentType,
-        topic: `${row.speaker} to ${row.target}`,
-        quote: row.quote,
-        speaker: row.speaker,
-        target: row.target,
-        sourceType,
-        tone: loreTone,
-        platform: lorePlatform,
-        duration: loreDuration,
-        language: loreLanguage,
-        narrativeAngle,
-        audienceLevel,
-        creatorGoal,
-        exploreSelection: {
+      const response = await fetch("/api/interactions/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           speaker: row.speaker,
           target: row.target,
           quote: row.quote,
@@ -644,8 +651,65 @@ export default function HomePage() {
           section: row.section,
           sourceUrl: row.sourceUrl,
           isSkinContext: row.isSkinContext,
-        },
+          tone: loreTone,
+          platform: lorePlatform,
+          duration: loreDuration,
+          narrativeAngle,
+          audienceLevel,
+          creatorGoal,
+          language: loreLanguage,
+        }),
       });
+      const raw = (await response.json()) as Record<string, unknown>;
+      if (!response.ok) {
+        setLoreError(typeof raw.error === "string" ? raw.error : "Explain request failed.");
+        return;
+      }
+      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
+      const langCode = uiLanguageToMetadataCode(loreLanguage);
+      const interaction = raw.interaction as {
+        speaker: string;
+        target: string;
+        quote: string;
+        interactionType: string;
+        sourceUrl: string;
+      };
+      const partial = {
+        interaction: {
+          speaker: interaction.speaker,
+          target: interaction.target,
+          quote: interaction.quote,
+          interactionType: interaction.interactionType,
+          sourceType: row.sourceType,
+          sourceReference: interaction.sourceUrl,
+          canonStatus: "verified_written_voice_line" as const,
+        },
+        canonResearch: raw.canonResearch,
+        script: raw.script,
+        metadata: {
+          language: "en",
+          durationTarget,
+          formatVersion: LOL_INTERACTION_FORMAT_VERSION,
+          sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+        },
+      };
+      const normalized = normalizeLoLInteractionResponse(partial, { language: langCode, durationTarget });
+      setLoreResult(normalized);
+      setEditableScript(normalized.script.fullScript);
+      setVoiceError("");
+      setVoiceNotice("");
+      if (rawAudioUrl) {
+        URL.revokeObjectURL(rawAudioUrl);
+        setRawAudioUrl("");
+      }
+      if (cleanedGeneratedAudioUrl) {
+        URL.revokeObjectURL(cleanedGeneratedAudioUrl);
+        setCleanedGeneratedAudioUrl("");
+      }
+      setRawAudioBlob(null);
+    } catch (explainError) {
+      console.error("[explorer explain]", explainError);
+      setLoreError(explainError instanceof Error ? explainError.message : "Network error while explaining.");
     } finally {
       setIsLoreGenerating(false);
     }
@@ -1072,11 +1136,14 @@ export default function HomePage() {
                     className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-200/50"
                   >
                     <option value="">— Choose a champion —</option>
-                    {explorerChampionOptions.map((champion) => (
-                      <option key={champion.slug} value={champion.slug}>
-                        {champion.name}
-                      </option>
-                    ))}
+                    {explorerChampionOptions.map((champion) => {
+                      const pageTitle = wikiPageTitleFromAudioPageUrl(champion.audioPageUrl);
+                      return (
+                        <option key={champion.audioPageUrl} value={pageTitle}>
+                          {champion.name}
+                        </option>
+                      );
+                    })}
                   </select>
                 </label>
               </div>
@@ -1120,13 +1187,28 @@ export default function HomePage() {
                       {explorerInteractionsError}
                     </div>
                   ) : null}
+                  {explorerInteractions?.error ? (
+                    <div className="rounded-2xl border border-amber-300/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-50">
+                      {explorerInteractions.error}
+                    </div>
+                  ) : null}
 
                   {explorerInteractions && !explorerInteractionsLoading ? (
                     <>
                       <p className="text-sm text-slate-300">
-                        <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> has{" "}
-                        <span className="text-cyan-200">{explorerInteractions.count.total}</span> written interactions in this view (spoken by:{" "}
-                        {explorerInteractions.count.spokenByChampion}, spoken to: {explorerInteractions.count.spokenToChampion}).
+                        <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> —{" "}
+                        <span className="text-cyan-200">{explorerInteractions.count.spokenByChampion}</span> lines spoken by
+                        them on their Fandom audio page
+                        {typeof explorerInteractions.count.spokenByFirstEncounter === "number" ? (
+                          <>
+                            {" "}
+                            (<span className="text-cyan-100">{explorerInteractions.count.spokenByFirstEncounter}</span> tagged
+                            &ldquo;First Encounter&rdquo;)
+                          </>
+                        ) : null}
+                        . <span className="text-cyan-200">{explorerInteractions.count.spokenToChampion}</span> lines where they
+                        are the target (from other champions&rsquo; pages).{" "}
+                        <span className="text-white">{explorerInteractions.count.total}</span> unique cards in &ldquo;All&rdquo;.
                       </p>
                       {explorerInteractions.extractionNote ? (
                         <p className="text-xs text-slate-500">{explorerInteractions.extractionNote}</p>
@@ -1229,7 +1311,7 @@ export default function HomePage() {
                                 rel="noreferrer"
                                 className="text-xs font-semibold text-cyan-200 underline underline-offset-2"
                               >
-                                Source
+                                {row.sourcePageTitle || "Fandom audio page"}
                               </a>
                             </div>
                             <blockquote className="mt-3 border-l-2 border-cyan-400/40 pl-3 text-sm leading-relaxed text-slate-100">

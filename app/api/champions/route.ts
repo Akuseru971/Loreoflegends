@@ -13,7 +13,7 @@ export async function GET() {
     return NextResponse.json(
       {
         error: "Failed to load the Fandom champion audio category. Try again later.",
-        champions: [] as { name: string; slug: string; audioPageUrl: string }[],
+        champions: [] as { name: string; audioPageUrl: string }[],
         count: 0,
         sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
       },
