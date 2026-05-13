@@ -26,33 +26,19 @@ const EXPLORER_LOADING_STAGES = [
 
 const EXPLORER_SUCCESS_LINE = "Interactions found.";
 
-const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
-const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
-const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
-const durations = ["45s", "60s"] as const;
-const languages = ["English", "French", "Spanish"] as const;
-const narrativeAngles = [
-  "Relationship",
-  "Conflict",
-  "Trauma",
-  "Ideology",
-  "Family tie",
-  "Rivalry",
-  "Hidden subtext",
-] as const;
+/** Fixed preferences for lore generation (no UI — same defaults as before). */
+const DEFAULT_LORE_CONTENT_TYPE = "Voice Line";
+const DEFAULT_LORE_TONE = "Mysterious";
+const DEFAULT_LORE_PLATFORM = "TikTok";
+const DEFAULT_LORE_DURATION: "45s" | "60s" = "60s";
+const DEFAULT_LORE_LANGUAGE = "English";
+const DEFAULT_NARRATIVE_ANGLE = "Relationship";
+const DEFAULT_AUDIENCE_LEVEL = "Casual player";
+const DEFAULT_CREATOR_GOAL = "Teach clearly";
+
 const sourceTypes = ["Unknown / Let AI assess", "Base champion voice line", "Skin voice line", "Legends of Runeterra", "Wild Rift", "Cinematic", "Riot Universe story", "Old / legacy lore"] as const;
-const audienceLevels = ["New to lore", "Casual player", "Lore fan"] as const;
-const creatorGoals = ["Teach clearly", "Maximize retention", "Prepare voiceover", "Spark comments"] as const;
 const elevenLabsModels = ["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5", "eleven_v3"] as const;
 
-type LoreContentType = (typeof loreContentTypeOptions)[number];
-type LoreTone = (typeof tones)[number];
-type LorePlatform = (typeof platforms)[number];
-type LoreDuration = (typeof durations)[number];
-type LoreLanguage = (typeof languages)[number];
-type NarrativeAngle = (typeof narrativeAngles)[number];
-type AudienceLevel = (typeof audienceLevels)[number];
-type CreatorGoal = (typeof creatorGoals)[number];
 type SourceType = (typeof sourceTypes)[number];
 type ElevenLabsModel = (typeof elevenLabsModels)[number];
 
@@ -256,19 +242,11 @@ export default function HomePage() {
   const [notice, setNotice] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [loreContentType, setLoreContentType] = useState<LoreContentType>("Voice Line");
   const [loreTopic, setLoreTopic] = useState("");
   const [interactionQuote, setInteractionQuote] = useState("");
   const [speakerChampion, setSpeakerChampion] = useState("");
   const [targetChampion, setTargetChampion] = useState("");
   const [sourceType, setSourceType] = useState<SourceType>("Unknown / Let AI assess");
-  const [loreTone, setLoreTone] = useState<LoreTone>("Mysterious");
-  const [lorePlatform, setLorePlatform] = useState<LorePlatform>("TikTok");
-  const [loreDuration, setLoreDuration] = useState<LoreDuration>("60s");
-  const [loreLanguage, setLoreLanguage] = useState<LoreLanguage>("English");
-  const [narrativeAngle, setNarrativeAngle] = useState<NarrativeAngle>("Relationship");
-  const [audienceLevel, setAudienceLevel] = useState<AudienceLevel>("Casual player");
-  const [creatorGoal, setCreatorGoal] = useState<CreatorGoal>("Teach clearly");
   const [loreResult, setLoreResult] = useState<LoLInteractionExplainerResponse | null>(null);
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
@@ -575,8 +553,8 @@ export default function HomePage() {
         parsed = null;
       }
 
-      const langCode = uiLanguageToMetadataCode(loreLanguage);
-      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
+      const langCode = uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE);
+      const durationTarget = DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s";
       const normalized = normalizeLoLInteractionResponse(parsed, {
         language: langCode,
         durationTarget,
@@ -603,8 +581,8 @@ export default function HomePage() {
     } catch (submitError) {
       console.error("[lore client] fetch failed", submitError);
       const fallback = normalizeLoLInteractionResponse(null, {
-        language: uiLanguageToMetadataCode(loreLanguage),
-        durationTarget: loreDuration === "45s" ? "45s" : "45-60s",
+        language: uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE),
+        durationTarget: DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s",
       });
       const msg = submitError instanceof Error ? submitError.message : "Network error while generating lore.";
       fallback.canonResearch.notConfirmed = [msg, ...fallback.canonResearch.notConfirmed];
@@ -633,19 +611,19 @@ export default function HomePage() {
     setIsLoreGenerating(true);
     try {
       await submitLoreRequest({
-        contentType: loreContentType,
+        contentType: DEFAULT_LORE_CONTENT_TYPE,
         topic: loreTopic,
         quote: interactionQuote,
         speaker: speakerChampion,
         target: targetChampion,
         sourceType,
-        tone: loreTone,
-        platform: lorePlatform,
-        duration: loreDuration,
-        language: loreLanguage,
-        narrativeAngle,
-        audienceLevel,
-        creatorGoal,
+        tone: DEFAULT_LORE_TONE,
+        platform: DEFAULT_LORE_PLATFORM,
+        duration: DEFAULT_LORE_DURATION,
+        language: DEFAULT_LORE_LANGUAGE,
+        narrativeAngle: DEFAULT_NARRATIVE_ANGLE,
+        audienceLevel: DEFAULT_AUDIENCE_LEVEL,
+        creatorGoal: DEFAULT_CREATOR_GOAL,
         mode: generationMode,
       });
     } finally {
@@ -668,13 +646,13 @@ export default function HomePage() {
           section: row.section,
           sourceUrl: row.sourceUrl,
           isSkinContext: row.isSkinContext,
-          tone: loreTone,
-          platform: lorePlatform,
-          duration: loreDuration,
-          narrativeAngle,
-          audienceLevel,
-          creatorGoal,
-          language: loreLanguage,
+          tone: DEFAULT_LORE_TONE,
+          platform: DEFAULT_LORE_PLATFORM,
+          duration: DEFAULT_LORE_DURATION,
+          narrativeAngle: DEFAULT_NARRATIVE_ANGLE,
+          audienceLevel: DEFAULT_AUDIENCE_LEVEL,
+          creatorGoal: DEFAULT_CREATOR_GOAL,
+          language: DEFAULT_LORE_LANGUAGE,
         }),
       });
       const raw = (await response.json()) as Record<string, unknown>;
@@ -682,8 +660,8 @@ export default function HomePage() {
         setLoreError(typeof raw.error === "string" ? raw.error : "Explain request failed.");
         return;
       }
-      const durationTarget = loreDuration === "45s" ? "45s" : "45-60s";
-      const langCode = uiLanguageToMetadataCode(loreLanguage);
+      const durationTarget = DEFAULT_LORE_DURATION === "45s" ? "45s" : "45-60s";
+      const langCode = uiLanguageToMetadataCode(DEFAULT_LORE_LANGUAGE);
       const interaction = raw.interaction as {
         speaker: string;
         target: string;
@@ -962,61 +940,7 @@ export default function HomePage() {
               </div>
 
               <form onSubmit={(event) => handleLoreSubmit(event, "custom")} className="rounded-[1.5rem] border border-white/10 bg-white/[0.045] p-5">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <SelectField
-                    label="Content type"
-                    value={loreContentType}
-                    onChange={(value) => setLoreContentType(value as LoreContentType)}
-                    options={loreContentTypeOptions}
-                  />
-                  <SelectField
-                    label="Tone"
-                    value={loreTone}
-                    onChange={(value) => setLoreTone(value as LoreTone)}
-                    options={tones}
-                  />
-                  <SelectField
-                    label="Platform"
-                    value={lorePlatform}
-                    onChange={(value) => setLorePlatform(value as LorePlatform)}
-                    options={platforms}
-                  />
-                  <SelectField
-                    label="Duration"
-                    value={loreDuration}
-                    onChange={(value) => setLoreDuration(value as LoreDuration)}
-                    options={durations}
-                  />
-                  <SelectField
-                    label="Language"
-                    value={loreLanguage}
-                    onChange={(value) => setLoreLanguage(value as LoreLanguage)}
-                    options={languages}
-                  />
-                  <SelectField
-                    label="Interaction angle"
-                    value={narrativeAngle}
-                    onChange={(value) => setNarrativeAngle(value as NarrativeAngle)}
-                    options={narrativeAngles}
-                  />
-                  <SelectField
-                    label="Audience"
-                    value={audienceLevel}
-                    onChange={(value) => setAudienceLevel(value as AudienceLevel)}
-                    options={audienceLevels}
-                  />
-                  <SelectField
-                    label="Creator goal"
-                    value={creatorGoal}
-                    onChange={(value) => setCreatorGoal(value as CreatorGoal)}
-                    options={creatorGoals}
-                  />
-                  <div className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-sm leading-6 text-cyan-50/85">
-                    Smart defaults: English, TikTok, mysterious, 60s, relationship-focused.
-                  </div>
-                </div>
-
-                <label className="mt-4 block">
+                <label className="block">
                   <span className="mb-2 block text-sm font-bold text-slate-200">Interaction or relationship to explain</span>
                   <input
                     value={loreTopic}
