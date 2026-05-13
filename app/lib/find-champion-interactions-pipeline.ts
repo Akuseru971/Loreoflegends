@@ -1,40 +1,69 @@
 /**
- * Champion interaction discovery: backend fetches category + audio page HTML, OpenAI matches
- * the audio URL from real candidates (legacy prompt/schema in fandom-openai-agent), OpenAI
- * extracts lines from provided page text with the same legacy extraction prompt, then results
- * are merged with deterministic HTML + wikitext parsing (parseAndCacheLoLAudioPage).
+ * POST /api/find-champion-interactions — strict workflow:
+ * 1) Backend fetches Category:LoL_Champion_audio.
+ * 2) OpenAI picks the champion /LoL/Audio URL using only extracted links + page text (no memory URLs).
+ * 3) Backend fetches that audio page and builds visible text for the model.
+ * 4) OpenAI extracts written champion-to-champion lines; server rejects quotes not present in that text.
+ * No lore/script here; no deterministic HTML/wikitext merge (OpenAI-only extraction per product spec).
  */
 
+import OpenAI from "openai";
 import { fetchFandomParsedHtml, fandomHtmlToSearchPlainText } from "@/app/lib/fandom-audio-html";
-import { parseAndCacheLoLAudioPage } from "@/app/lib/fandom-champion-interaction-service";
 import {
   extractChampionAudioLinkCandidatesFromCategoryHtml,
-  extractLinksFromCategoryPage,
   extractVisibleTextFromChampionAudioPage,
   fetchChampionAudioPage,
   fetchFandomPage,
-  findChampionAudioUrl,
-  type ChampionAudioLink,
   type FandomChampionAudioLinkCandidate,
 } from "@/app/lib/fandom-page-fetch";
-import {
-  extractWrittenInteractionsForFindPipeline,
-  fandomAudioPageTitleFromWikiUrl,
-  findChampionAudioPageWithOpenAI,
-  wikiChampionKeyFromAudioPageUrl,
-  type RawWrittenInteractionFromPage,
-} from "@/app/lib/fandom-openai-agent";
+import { fandomAudioPageTitleFromWikiUrl, wikiChampionKeyFromAudioPageUrl } from "@/app/lib/fandom-openai-agent";
+import { callOpenAiWithSchema } from "@/app/lib/lol-openai-expansion";
 import {
   LOL_WIKI_AUDIO_CATEGORY_URL,
   extractChampionAudioPageLinksFromCategory,
   toWikiChampionKey,
-  type WikiVoiceInteraction,
   wikiFandomArticleUrl,
 } from "@/app/lib/lol-wiki-audio";
 
 const LOG = "[find-champion-interactions]";
 
 const WRITTEN_SOURCE_TYPE = "Written interaction from Fandom champion audio page" as const;
+
+const CATEGORY_TEXT_MAX = 120_000;
+const CHAMPION_PAGE_TEXT_MAX = 110_000;
+
+const LINK_RESULT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    result: { type: "string" },
+  },
+  required: ["result"],
+};
+
+const EXTRACT_INTERACTIONS_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    interactions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          speaker: { type: "string" },
+          target: { type: "string" },
+          quote: { type: "string" },
+          interactionType: { type: "string" },
+          section: { type: "string" },
+          sourceUrl: { type: "string" },
+        },
+        required: ["speaker", "target", "quote", "interactionType", "section", "sourceUrl"],
+      },
+    },
+  },
+  required: ["interactions"],
+};
 
 export type PipelineInteractionRow = {
   speaker: string;
@@ -61,78 +90,59 @@ function log(step: string, detail: Record<string, unknown>): void {
   console.info(`${LOG} ${step}`, detail);
 }
 
+function openaiClient(): OpenAI | null {
+  const k = process.env.OPENAI_API_KEY?.trim();
+  return k ? new OpenAI({ apiKey: k }) : null;
+}
+
 function normName(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function candidatesToChampionLinks(candidates: FandomChampionAudioLinkCandidate[]): ChampionAudioLink[] {
-  const out: ChampionAudioLink[] = [];
-  for (const c of candidates) {
-    const key = wikiChampionKeyFromAudioPageUrl(c.url);
-    if (!key) {
-      continue;
+function parseJson(raw: string): Record<string, unknown> | null {
+  const t = raw.trim();
+  if (!t) {
+    return null;
+  }
+  try {
+    return JSON.parse(t) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function quoteAppearsInPageText(quote: string, pageText: string): boolean {
+  const p = pageText.replace(/\u00a0/g, " ");
+  const q = quote.replace(/\u00a0/g, " ");
+  if (p.includes(q)) {
+    return true;
+  }
+  return p.replace(/\s+/g, " ").includes(q.replace(/\s+/g, " "));
+}
+
+function resolveUrlAgainstAllowedSet(result: string, allowedUrls: Set<string>): string | null {
+  const t = result.trim();
+  if (!t || t.toUpperCase() === "NO_MATCH_FOUND") {
+    return null;
+  }
+  if (allowedUrls.has(t)) {
+    return t;
+  }
+  try {
+    const abs = t.startsWith("http") ? new URL(t) : new URL(t, "https://leagueoflegends.fandom.com");
+    const h = abs.href.replace(/\/+$/, "");
+    for (const u of allowedUrls) {
+      if (u.replace(/\/+$/, "") === h) {
+        return u;
+      }
     }
-    out.push({
-      name: key.replace(/_/g, " "),
-      fullUrl: c.url,
-      wikiKey: key,
-    });
+  } catch {
+    /* ignore */
   }
-  return out;
+  return null;
 }
 
-function rowDedupeKey(r: PipelineInteractionRow): string {
-  return `${normName(r.speaker)}|${normName(r.target)}|${r.quote.replace(/\s+/g, " ").trim().toLowerCase()}`;
-}
-
-function mergePipelineRows(
-  primary: PipelineInteractionRow[],
-  secondary: PipelineInteractionRow[],
-): PipelineInteractionRow[] {
-  const m = new Map<string, PipelineInteractionRow>();
-  for (const r of primary) {
-    m.set(rowDedupeKey(r), r);
-  }
-  for (const r of secondary) {
-    const k = rowDedupeKey(r);
-    if (!m.has(k)) {
-      m.set(k, r);
-    }
-  }
-  return [...m.values()];
-}
-
-function wikiVoiceToPipelineRow(r: WikiVoiceInteraction): PipelineInteractionRow {
-  const section = r.wikiSection.split("›")[0]?.trim() || r.wikiSection || "";
-  return {
-    speaker: r.speaker,
-    target: r.target,
-    quote: r.quote,
-    interactionType: r.interactionType,
-    section: section || "Intro",
-    sourceUrl: r.sourceUrl,
-    sourcePageTitle: r.wikiPageTitle || "",
-    sourceType: WRITTEN_SOURCE_TYPE,
-    isSkinContext: r.isSkinContext,
-  };
-}
-
-function rawToPipelineRow(raw: RawWrittenInteractionFromPage, pageTitle: string | null): PipelineInteractionRow {
-  const skin = /skin/i.test(raw.interactionType) || /skin/i.test(raw.section);
-  return {
-    speaker: raw.speaker,
-    target: raw.target,
-    quote: raw.quote,
-    interactionType: raw.interactionType,
-    section: raw.section,
-    sourceUrl: raw.sourceUrl,
-    sourcePageTitle: pageTitle ?? "",
-    sourceType: WRITTEN_SOURCE_TYPE,
-    isSkinContext: skin,
-  };
-}
-
-async function loadCategoryCandidates(): Promise<{
+async function loadCategoryBundle(): Promise<{
   ok: boolean;
   status: number;
   htmlLength: number;
@@ -157,10 +167,153 @@ async function loadCategoryCandidates(): Promise<{
   return { ok: r.ok, status: r.status, htmlLength: r.html.length, html: r.html, candidates };
 }
 
-/**
- * Category fetch → OpenAI link match (legacy schema/prompt) with deterministic URL fallback →
- * champion page fetch → deterministic HTML/wikitext parse merged with legacy OpenAI extraction.
- */
+async function openAiMatchCategoryAudioLink(
+  client: OpenAI,
+  selectedChampion: string,
+  candidateUrls: string[],
+  categoryPageText: string,
+): Promise<{ url: string | null; raw: string }> {
+  const allowed = new Set(candidateUrls);
+  const urlBlock = candidateUrls.join("\n");
+
+  const system = `You are given a selected League of Legends champion and the content of this Fandom category page:
+
+https://leagueoflegends.fandom.com/wiki/Category:LoL_Champion_audio
+
+Your task is to identify the exact link that leads to the selected champion's LoL audio page.
+
+Rules:
+- Find the page that corresponds to the selected champion.
+- The correct link should be a Fandom page ending with /LoL/Audio.
+- Do not invent a URL.
+- Do not guess from memory.
+- Use only the links or content provided from the category page.
+- Output JSON with one string field "result": either the full HTTPS URL that is exactly one of ALLOWED_URLS, or exactly "NO_MATCH_FOUND".`;
+
+  const user = `Selected champion:
+${selectedChampion}
+
+ALLOWED_URLS (the result must be exactly one of these strings or NO_MATCH_FOUND):
+${urlBlock}
+
+Category page text excerpt (same wiki category; use with ALLOWED_URLS only; never output a URL not listed above):
+---
+${categoryPageText}
+---`;
+
+  const raw = await callOpenAiWithSchema(client, {
+    system,
+    user,
+    schemaName: "fandom_category_audio_link_result",
+    schema: LINK_RESULT_SCHEMA,
+    temperature: 0,
+  });
+
+  const parsed = parseJson(raw);
+  const result = typeof parsed?.result === "string" ? parsed.result.trim() : "";
+  const url = result ? resolveUrlAgainstAllowedSet(result, allowed) : null;
+  return { url, raw };
+}
+
+async function openAiExtractWrittenInteractions(
+  client: OpenAI,
+  selectedChampion: string,
+  audioPageUrl: string,
+  pageText: string,
+): Promise<{ rows: PipelineInteractionRow[]; raw: string }> {
+  const pageTitle = fandomAudioPageTitleFromWikiUrl(audioPageUrl);
+  const canonicalSource = pageTitle ? wikiFandomArticleUrl(pageTitle) : audioPageUrl.trim();
+  const excerpt =
+    pageText.length > CHAMPION_PAGE_TEXT_MAX ?
+      `${pageText.slice(0, CHAMPION_PAGE_TEXT_MAX)}\n\n[TRUNCATED]`
+    : pageText;
+
+  const system = `You are analyzing the written content of a League of Legends champion audio page.
+
+Selected champion:
+${selectedChampion}
+
+Source page:
+${audioPageUrl}
+
+Your task:
+Extract all written quotes where the selected champion speaks to another champion.
+
+Only extract written champion-to-champion interactions that are explicitly visible in the provided page text.
+
+Do not use audio files.
+Do not use .ogg filenames.
+Do not download audio.
+Do not transcribe audio.
+Do not invent quotes.
+Do not invent targets.
+Do not summarize.
+Do not generate lore.
+
+For each quote, extract:
+- speaker
+- target champion
+- exact quote
+- interaction type
+- section
+- source URL (use exactly: ${canonicalSource})
+
+Return JSON only: one object with key "interactions" whose value is an array of objects with fields speaker, target, quote, interactionType, section, sourceUrl. Use an empty array if there are none.`;
+
+  const user = `PAGE_TEXT:\n${excerpt}`;
+
+  const raw = await callOpenAiWithSchema(client, {
+    system,
+    user,
+    schemaName: "fandom_champion_written_interactions",
+    schema: EXTRACT_INTERACTIONS_SCHEMA,
+    temperature: 0,
+  });
+
+  const parsed = parseJson(raw);
+  const arr = parsed?.interactions;
+  const out: PipelineInteractionRow[] = [];
+  if (!Array.isArray(arr)) {
+    return { rows: out, raw };
+  }
+
+  for (const item of arr) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const o = item as Record<string, unknown>;
+    const speaker = typeof o.speaker === "string" ? o.speaker.trim() : "";
+    const target = typeof o.target === "string" ? o.target.trim() : "";
+    const quote = typeof o.quote === "string" ? o.quote.trim() : "";
+    const interactionType = typeof o.interactionType === "string" ? o.interactionType.trim() : "";
+    const section = typeof o.section === "string" ? o.section.trim() : "";
+    const sourceUrl = typeof o.sourceUrl === "string" ? o.sourceUrl.trim() : audioPageUrl;
+    if (!speaker || !target || quote.length < 4 || !interactionType || !section) {
+      continue;
+    }
+    if (normName(speaker) !== normName(selectedChampion)) {
+      continue;
+    }
+    if (!quoteAppearsInPageText(quote, pageText)) {
+      continue;
+    }
+    const skin = /skin/i.test(interactionType) || /skin/i.test(section);
+    out.push({
+      speaker,
+      target,
+      quote,
+      interactionType,
+      section,
+      sourceUrl: canonicalSource || sourceUrl,
+      sourcePageTitle: pageTitle ?? "",
+      sourceType: WRITTEN_SOURCE_TYPE,
+      isSkinContext: skin,
+    });
+  }
+
+  return { rows: out, raw };
+}
+
 export async function runFindChampionInteractionsPipeline(championParam: string): Promise<FindChampionInteractionsResult> {
   const decoded = decodeURIComponent(championParam.trim());
   const firstSeg = decoded.split("/")[0]?.replace(/_/g, " ") ?? decoded.replace(/_/g, " ");
@@ -176,85 +329,62 @@ export async function runFindChampionInteractionsPipeline(championParam: string)
     error,
   });
 
-  log("1_selected_champion", { championParam: decoded, selectedChampion, slug });
+  log("step_1_selected_champion", { championParam: decoded, selectedChampion, slug });
 
-  const hasOpenAiKey = Boolean(process.env.OPENAI_API_KEY?.trim());
+  const client = openaiClient();
+  if (!client) {
+    return empty("Missing OPENAI_API_KEY on the server.");
+  }
 
-  const cat = await loadCategoryCandidates();
-  log("2_category_fetch", { ok: cat.ok, status: cat.status, htmlLength: cat.htmlLength });
+  const cat = await loadCategoryBundle();
+  log("step_2_category_fetch_status", { ok: cat.ok, httpStatus: cat.status, htmlLength: cat.htmlLength });
   if (!cat.ok || !cat.html.length) {
     return empty("Failed to fetch the Fandom category page.");
   }
 
+  log("step_3_category_content_size", { htmlLength: cat.htmlLength });
+
   const candidates = cat.candidates;
-  log("4_links_extracted", { count: candidates.length });
-  if (!candidates.length) {
+  const candidateUrls = [...new Set(candidates.map((c) => c.url))];
+  log("step_4_extracted_link_count", { linkCount: candidateUrls.length });
+  if (!candidateUrls.length) {
     return empty("No /LoL/Audio links were extracted from the category page.");
   }
 
   const categoryVisible = extractVisibleTextFromChampionAudioPage(cat.html);
-  log("3_category_visible_text_length", { length: categoryVisible.length });
+  const categoryPageText =
+    categoryVisible.length > CATEGORY_TEXT_MAX ?
+      `${categoryVisible.slice(0, CATEGORY_TEXT_MAX)}\n[TRUNCATED]`
+    : categoryVisible;
 
-  let openAiLinkError = "";
-  let audioPageUrl: string | null = null;
-  let linkSource: "openai" | "deterministic_html" | "deterministic_candidates" | "none" = "none";
+  const link = await openAiMatchCategoryAudioLink(client, selectedChampion, candidateUrls, categoryPageText);
+  log("step_5_openai_link_raw_response", {
+    rawLength: link.raw.length,
+    rawPreview: link.raw.slice(0, 8000),
+  });
 
-  if (hasOpenAiKey) {
-    const linkMatch = await findChampionAudioPageWithOpenAI(selectedChampion, candidates);
-    openAiLinkError = linkMatch.error;
-    log("5_openai_link_match", {
-      found: linkMatch.found,
-      audioPageUrl: linkMatch.audioPageUrl,
-      matchedLabel: linkMatch.matchedLabel,
-      confidence: linkMatch.confidence,
-      error: linkMatch.error,
-      jsonPreview: JSON.stringify(linkMatch).slice(0, 2000),
-    });
-    if (linkMatch.found && linkMatch.audioPageUrl) {
-      audioPageUrl = linkMatch.audioPageUrl;
-      linkSource = "openai";
-    }
-  } else {
-    log("5_openai_link_skipped", { reason: "no OPENAI_API_KEY" });
+  if (!link.url) {
+    log("step_6_champion_url", { resolved: false, reason: "NO_MATCH_OR_invalid_url" });
+    return empty(
+      "OpenAI could not identify a matching champion audio page URL from the category page (NO_MATCH_FOUND or invalid URL).",
+    );
   }
 
-  if (!audioPageUrl) {
-    const fromHtml = findChampionAudioUrl(selectedChampion, extractLinksFromCategoryPage(cat.html));
-    if (fromHtml) {
-      audioPageUrl = fromHtml.fullUrl;
-      linkSource = "deterministic_html";
-      log("5b_url_fallback_html_links", { url: audioPageUrl });
-    }
-  }
-  if (!audioPageUrl) {
-    const fromCands = findChampionAudioUrl(selectedChampion, candidatesToChampionLinks(candidates));
-    if (fromCands) {
-      audioPageUrl = fromCands.fullUrl;
-      linkSource = "deterministic_candidates";
-      log("5b_url_fallback_candidates", { url: audioPageUrl });
-    }
-  }
-
-  if (!audioPageUrl) {
-    const msg =
-      hasOpenAiKey ?
-        openAiLinkError || "OpenAI could not match the selected champion to any link on the category page."
-      : "Could not resolve champion audio page from category links (set OPENAI_API_KEY for fuzzy link matching).";
-    log("6_champion_url_failed", { error: msg, linkSource });
-    return empty(msg);
-  }
-
-  log("6_champion_url_ok", { audioPageUrl, linkSource });
+  const audioPageUrl = link.url;
+  log("step_6_champion_url", { resolved: true, audioPageUrl });
 
   const pageFetch = await fetchChampionAudioPage(audioPageUrl);
-  log("7_champion_page_fetch", { ok: pageFetch.ok, status: pageFetch.status, htmlLength: pageFetch.html.length });
+  log("step_7_champion_page_fetch_status", {
+    ok: pageFetch.ok,
+    httpStatus: pageFetch.status,
+    htmlLength: pageFetch.html.length,
+  });
   if (!pageFetch.ok || !pageFetch.html.length) {
-    return empty("Failed to fetch the champion audio page.", audioPageUrl);
+    return empty("Failed to fetch the champion audio page from the URL OpenAI returned.", audioPageUrl);
   }
 
   const resolvedTitle =
     fandomAudioPageTitleFromWikiUrl(audioPageUrl) || `${wikiChampionKeyFromAudioPageUrl(audioPageUrl) ?? slug}/LoL/Audio`;
-  const pageTitleStr = fandomAudioPageTitleFromWikiUrl(audioPageUrl);
 
   let pageText = extractVisibleTextFromChampionAudioPage(pageFetch.html);
   if (pageText.length < 600) {
@@ -265,26 +395,21 @@ export async function runFindChampionInteractionsPipeline(championParam: string)
       pageText = [pageText, a, b].reduce((x, y) => (y.length > x.length ? y : x), "");
     }
   }
-  log("8_champion_page_text_length", { length: pageText.length });
 
-  const wikiRows = await parseAndCacheLoLAudioPage(resolvedTitle);
-  const fromDeterministic = wikiRows
-    .filter((r) => normName(r.speaker) === normName(selectedChampion))
-    .map(wikiVoiceToPipelineRow);
-  log("9_deterministic_parse", { wikiRowCount: wikiRows.length, spokenBySelected: fromDeterministic.length });
-
-  let fromOpenAi: RawWrittenInteractionFromPage[] = [];
-  if (hasOpenAiKey && pageText.trim()) {
-    fromOpenAi = await extractWrittenInteractionsForFindPipeline(selectedChampion, audioPageUrl, pageText);
-    log("9_openai_extract", { rowCount: fromOpenAi.length });
-  } else if (hasOpenAiKey && !pageText.trim()) {
-    log("9_openai_extract_skipped", { reason: "empty_page_text" });
+  log("step_8_champion_page_text_size", { textLength: pageText.length });
+  if (!pageText.trim()) {
+    return empty("Champion audio page visible text is empty after extraction; cannot extract quotes.", audioPageUrl);
   }
 
-  const openAiPipeline = fromOpenAi.map((r) => rawToPipelineRow(r, pageTitleStr ?? resolvedTitle));
-  const interactions = mergePipelineRows(fromDeterministic, openAiPipeline);
+  const extracted = await openAiExtractWrittenInteractions(client, selectedChampion, audioPageUrl, pageText);
+  log("step_9_openai_extract_raw_response", {
+    rawLength: extracted.raw.length,
+    rawPreview: extracted.raw.slice(0, 8000),
+  });
+
+  const interactions = extracted.rows;
   const count = interactions.length;
-  log("10_final_interaction_count", { count, deterministic: fromDeterministic.length, openai: openAiPipeline.length });
+  log("step_10_interactions_extracted_count", { count });
 
   return {
     selectedChampion,

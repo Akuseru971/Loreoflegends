@@ -975,8 +975,8 @@ export default function HomePage() {
                         ) : null}
                         <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> —{" "}
                         <span className="text-cyan-200">{explorerInteractions.count}</span> written champion interaction
-                        {explorerInteractions.count === 1 ? "" : "s"} (category index → OpenAI link match → page fetch →
-                        OpenAI extraction).
+                        {explorerInteractions.count === 1 ? "" : "s"} (Fandom category page → OpenAI link match → fetch
+                        page → OpenAI extraction).
                       </p>
 
                       <div className="grid gap-3 sm:grid-cols-3">

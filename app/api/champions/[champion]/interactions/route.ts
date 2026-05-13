@@ -9,8 +9,22 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cha
     return NextResponse.json({ error: "Missing champion parameter." }, { status: 400 });
   }
   try {
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      return NextResponse.json(
+        {
+          error: "Missing OPENAI_API_KEY on the server.",
+          selectedChampion: "",
+          slug: "",
+          audioPageUrl: "",
+          interactions: [],
+          count: 0,
+        },
+        { status: 503 },
+      );
+    }
     const data = await runFindChampionInteractionsPipeline(champion);
-    return NextResponse.json(data);
+    const status = data.error ? 422 : 200;
+    return NextResponse.json(data, { status });
   } catch (error) {
     console.error("[api/champions/.../interactions]", error);
     return NextResponse.json(

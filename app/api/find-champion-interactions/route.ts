@@ -10,8 +10,22 @@ export async function POST(request: Request) {
     if (!champion) {
       return NextResponse.json({ error: "Missing champion in JSON body.", count: 0, interactions: [] }, { status: 400 });
     }
+    if (!process.env.OPENAI_API_KEY?.trim()) {
+      return NextResponse.json(
+        {
+          error: "Missing OPENAI_API_KEY on the server.",
+          selectedChampion: "",
+          slug: "",
+          audioPageUrl: "",
+          interactions: [],
+          count: 0,
+        },
+        { status: 503 },
+      );
+    }
     const data = await runFindChampionInteractionsPipeline(champion);
-    return NextResponse.json(data);
+    const status = data.error ? 422 : 200;
+    return NextResponse.json(data, { status });
   } catch (error) {
     console.error("[api/find-champion-interactions]", error);
     return NextResponse.json(
