@@ -1,25 +1,16 @@
 import OpenAI from "openai";
 import { NextRequest, NextResponse } from "next/server";
 import {
+  LOL_INTERACTION_FORMAT_VERSION,
   NO_VERIFIED_VOICE_LINE_MESSAGE,
   OPENAI_LOL_INTERACTION_SCHEMA,
-  OPENAI_VOICE_LINE_DISCOVERY_SCHEMA,
   devLoreLog,
   failureLoLInteractionResponse,
   normalizeLoLInteractionResponse,
-  normalizeVoiceLineDiscoveryPack,
   parseOpenAiJsonContent,
-  sourceCategoryToSourceTypeLabel,
   uiLanguageToMetadataCode,
-  type VoiceLineDiscoveryCandidate,
-  type VoiceLineDiscoveryPack,
 } from "@/app/lib/lol-interaction-explainer";
-import {
-  fetchChampionAudioSnippetsFromWiki,
-  filterSnippetsByTargetHint,
-  formatWikiSnippetsForPrompt,
-  type WikiAudioSnippet,
-} from "@/app/lib/lol-wiki-audio";
+import { findChampionVoiceLineInteraction, LOL_WIKI_AUDIO_CATEGORY_URL, type WikiVoiceInteraction } from "@/app/lib/lol-wiki-audio";
 
 export const runtime = "nodejs";
 
@@ -96,143 +87,29 @@ function durationMetadataTarget(duration: keyof typeof durationWordRanges): stri
   return duration === "45s" ? "45s" : "45-60s";
 }
 
-function dedupeWikiSnippets(list: WikiAudioSnippet[]): WikiAudioSnippet[] {
-  const seen = new Set<string>();
-  const out: WikiAudioSnippet[] = [];
-  for (const s of list) {
-    const k = `${s.speaker}|${s.target}|${s.quote}`.toLowerCase();
-    if (seen.has(k)) {
-      continue;
-    }
-    seen.add(k);
-    out.push(s);
-  }
-  return out;
+function topicFirstToken(topic: string): string {
+  return topic.trim().split(/\s+/).filter(Boolean)[0] ?? "";
 }
 
 /**
- * Pulls /Audio wikitext-derived lines from the Fandom LoL wiki (same tree as
- * https://wiki.leagueoflegends.com/en-us/Category:LoL_Champion_audio).
- * Disabled when LOL_WIKI_FETCH=0.
+ * Resolve which champion(s) drive the wiki crawl. Speaker + target as a pair narrows to both;
+ * a single field uses that champion and enables reverse lookup inside findChampionVoiceLineInteraction.
  */
-async function collectWikiExcerptsForDiscovery(speakerHint: string, targetHint: string): Promise<string> {
-  if (process.env.LOL_WIKI_FETCH === "0") {
-    devLoreLog("wiki fetch", "skipped (LOL_WIKI_FETCH=0)");
-    return "";
-  }
-  if (!speakerHint.trim()) {
-    return "";
-  }
+function resolveWikiFocus(speaker: string, target: string, topic: string): { primaryDisplay: string; secondaryDisplay?: string } {
+  const s = speaker.trim();
+  const t = target.trim();
+  const tf = topicFirstToken(topic);
 
-  try {
-    let merged = await fetchChampionAudioSnippetsFromWiki(speakerHint);
-    if (targetHint.trim().length >= 2) {
-      const narrowed = filterSnippetsByTargetHint(merged, targetHint);
-      if (narrowed.length >= 3) {
-        merged = narrowed;
-      } else {
-        merged = dedupeWikiSnippets([...narrowed, ...merged]);
-        const reverse = await fetchChampionAudioSnippetsFromWiki(targetHint);
-        const cross = reverse.filter(
-          (s) =>
-            s.target.toLowerCase().includes(speakerHint.toLowerCase()) ||
-            s.quote.toLowerCase().includes(speakerHint.toLowerCase()),
-        );
-        merged = dedupeWikiSnippets([...merged, ...cross]);
-      }
-    }
-    devLoreLog("wiki snippet count", merged.length);
-    return formatWikiSnippetsForPrompt(merged.slice(0, 45), 14_000);
-  } catch (error) {
-    devLoreLog("wiki fetch error", error instanceof Error ? error.message : error);
-    return "";
+  if (s && t && s.toLowerCase() !== t.toLowerCase()) {
+    return { primaryDisplay: s, secondaryDisplay: t };
   }
-}
-
-function rankSourceCategory(cat: string): number {
-  const order = ["league_base_special", "league_skin", "cinematic_or_story", "lor", "wild_rift", "old_removed", "unknown"];
-  const i = order.indexOf(cat);
-  return i === -1 ? 99 : i;
-}
-
-/**
- * Picks one candidate the model marked `high` only. No high-confidence rows → no script pass.
- */
-function pickHighConfidenceCandidate(
-  pack: VoiceLineDiscoveryPack,
-  ctx: { speaker: string; target: string; quote: string },
-): VoiceLineDiscoveryCandidate | null {
-  const high = pack.candidates.filter((c) => c.confidence === "high" && c.quote.trim().length >= 4 && c.speaker.trim().length >= 2);
-  if (high.length === 0) {
-    return null;
+  if (s) {
+    return { primaryDisplay: s };
   }
-
-  const uq = ctx.quote.trim().toLowerCase();
-  if (uq.length >= 8) {
-    const byQuote = high.find(
-      (c) =>
-        c.quote.toLowerCase().includes(uq) ||
-        uq.includes(c.quote.trim().toLowerCase().slice(0, Math.min(48, c.quote.trim().length))),
-    );
-    if (byQuote) {
-      return byQuote;
-    }
+  if (t) {
+    return { primaryDisplay: t };
   }
-
-  const ut = ctx.target.trim().toLowerCase();
-  if (ut.length >= 2) {
-    const byTarget = high.filter(
-      (c) =>
-        c.target.trim().length > 0 &&
-        (c.target.toLowerCase().includes(ut) || ut.includes(c.target.toLowerCase())),
-    );
-    if (byTarget.length) {
-      return [...byTarget].sort((a, b) => rankSourceCategory(a.sourceCategory) - rankSourceCategory(b.sourceCategory))[0];
-    }
-  }
-
-  const us = ctx.speaker.trim().toLowerCase();
-  if (us.length >= 2) {
-    const bySp = high.filter((c) => c.speaker.toLowerCase().includes(us));
-    if (bySp.length) {
-      return [...bySp].sort((a, b) => rankSourceCategory(a.sourceCategory) - rankSourceCategory(b.sourceCategory))[0];
-    }
-  }
-
-  if (pack.selectedCandidateIndex >= 0 && pack.selectedCandidateIndex < pack.candidates.length) {
-    const sel = pack.candidates[pack.selectedCandidateIndex];
-    if (sel.confidence === "high" && sel.quote.trim()) {
-      return sel;
-    }
-  }
-
-  return [...high].sort((a, b) => rankSourceCategory(a.sourceCategory) - rankSourceCategory(b.sourceCategory))[0];
-}
-
-/**
- * If wiki excerpts were loaded, downgrade "high" candidates whose quote does not
- * appear in the excerpt text (prevents hallucinated "high" rows).
- */
-function alignDiscoveryConfidenceWithWiki(pack: VoiceLineDiscoveryPack, wikiExcerptBlock: string): VoiceLineDiscoveryPack {
-  if (!wikiExcerptBlock.trim()) {
-    return pack;
-  }
-  const hay = wikiExcerptBlock.toLowerCase();
-  const next = pack.candidates.map((c) => {
-    if (c.confidence !== "high") {
-      return c;
-    }
-    const q = c.quote.replace(/\s+/g, " ").trim().toLowerCase();
-    if (q.length < 6) {
-      return { ...c, confidence: "medium" as const };
-    }
-    const needle = q.length > 72 ? q.slice(0, 72) : q;
-    if (!hay.includes(needle)) {
-      return { ...c, confidence: "medium" as const };
-    }
-    return c;
-  });
-  return { ...pack, candidates: next };
+  return { primaryDisplay: tf };
 }
 
 function quoteAnchorsScript(quote: string, script: string): boolean {
@@ -245,167 +122,89 @@ function quoteAnchorsScript(quote: string, script: string): boolean {
   return s.includes(needle);
 }
 
-function scriptOpensWithRequiredPattern(language: string, script: string): boolean {
-  const t = script.trim();
-  if (!t.length) {
+function scriptOpensWithWhenPattern(script: string, speaker: string, quote: string, target: string): boolean {
+  const t = script.trim().toLowerCase();
+  if (!/^when\s+/.test(t)) {
     return false;
   }
-  if (language === "French") {
-    return /^quand\s+/i.test(t);
+  if (!t.includes(speaker.trim().toLowerCase())) {
+    return false;
   }
-  if (language === "Spanish") {
-    return /^cuando\s+/i.test(t);
+  if (!t.includes(target.trim().toLowerCase())) {
+    return false;
   }
-  return /^when\s+/i.test(t);
+  const q = quote.replace(/\s+/g, " ").trim().toLowerCase();
+  if (q.length >= 10) {
+    const needle = q.length > 44 ? q.slice(0, 44) : q;
+    if (!t.includes(needle)) {
+      return false;
+    }
+  }
+  return true;
 }
 
-function buildDiscoveryPrompt({
-  contentType,
-  topic,
-  quote,
-  speaker,
-  target,
-  sourceType,
-  wikiExcerptBlock,
-}: {
+function buildExpansionPrompt(opts: {
+  verified: WikiVoiceInteraction;
   contentType: string;
   topic: string;
-  quote: string;
-  speaker: string;
-  target: string;
-  sourceType: string;
-  wikiExcerptBlock: string;
-}) {
-  const wikiSection =
-    wikiExcerptBlock.trim().length > 0 ?
-      `WIKI_EXCERPTS (League of Legends Fandom wiki — parsed from champion /Audio pages under Category:LoL_Champion_audio; community CC-BY-SA transcriptions, still verify in client):
-${wikiExcerptBlock}
-
-When these excerpts are present:
-- A "high" confidence candidate MUST use a quote that appears VERBATIM (or as an obvious substring after trimming whitespace) in the excerpt list for that speaker→target row.
-- Prefer sourceCategory "league_base_special" unless the header/section clearly indicates skin, LoR, WR, cinematic, or legacy content.
-- Mention in discoveryNotes that candidates were checked against these excerpts.
-`
-    : `WIKI_EXCERPTS: (none retrieved — e.g. champion name mismatch, wiki timeout, or LOL_WIKI_FETCH=0). Use extreme caution: do NOT mark "high" unless you are independently certain from official Riot shipping audio you remember perfectly. Prefer "low" or "medium" or selectedCandidateIndex -1.`;
-
-  return `PASS A — VOICE LINE DISCOVERY (no lore essay, no script).
-
-You are a specialist in League of Legends champion voice lines and interactions. You do NOT browse the live internet, but you MUST only output candidate lines you are highly confident are real, verbatim (or extremely close) champion-to-champion lines from official Riot shipping content.
-
-${wikiSection}
-
-ABSOLUTE RULES:
-- NEVER invent a quote or paraphrase it as if it were exact.
-- NEVER output generic lore ("Swain is a master of secrets…") as a candidate.
-- Each candidate MUST be a specific line spoken by one champion toward or about another named champion (or clearly directed special interaction).
-- If you are not highly confident a line is real, put it with confidence "low" or "medium" — NOT "high".
-- Only "high" confidence means: you are confident this exact interaction exists in the cited category.
-
-SEARCH PRIORITY (try in this order when hunting lines):
-1) Current League of Legends in-game base or special champion interaction / taunt toward a named champion.
-2) Current League special interaction (non-skin).
-3) Official Riot cinematic or Universe story dialogue (label cinematic_or_story).
-4) Legends of Runeterra (lor).
-5) Wild Rift (wild_rift).
-6) Old / removed / legacy line (old_removed) — must be labeled as such in sourceReference.
-
-If the user names only ONE champion (see inputs), brainstorm several REAL interactions that champion has toward others, compare them, and pick the strongest for TikTok in selectedCandidateIndex (must point to a "high" row, or -1 if none).
-
-Inputs:
-- Content type: ${contentType}
-- Topic / hint: ${topic || "(none)"}
-- User exact quote (if any): ${quote || "(none)"}
-- User speaker hint: ${speaker || "(none)"}
-- User target hint: ${target || "(none)"}
-- User source hint: ${sourceType}
-
-OUTPUT JSON (schema enforced):
-- candidates: up to 8 objects with speaker, target, quote, sourceCategory (enum), sourceReference (short, human-readable; no fake URLs), confidence (high|medium|low), whyInteresting (why this line hits rivalry/trauma/secrets/etc.).
-- selectedCandidateIndex: index of your best "high" pick, or -1 if there is NO high-confidence line.
-- discoveryNotes: brief note on what you searched and why you picked that index (or why none).
-
-sourceCategory enum values: league_base_special | league_skin | cinematic_or_story | lor | wild_rift | old_removed | unknown
-
-Remember: if there is no line you trust as real, return candidates (possibly empty or all low/medium) and selectedCandidateIndex = -1.`;
-}
-
-function buildExpansionPrompt({
-  candidate,
-  contentType,
-  topic,
-  quote,
-  speaker,
-  target,
-  sourceType,
-  tone,
-  platform,
-  duration,
-  language,
-  narrativeAngle,
-  audienceLevel,
-  creatorGoal,
-}: {
-  candidate: VoiceLineDiscoveryCandidate;
-  contentType: string;
-  topic: string;
-  quote: string;
-  speaker: string;
-  target: string;
+  userQuote?: string;
   sourceType: string;
   tone: string;
   platform: string;
   duration: keyof typeof durationWordRanges;
-  language: string;
   narrativeAngle: string;
   audienceLevel: string;
   creatorGoal: string;
 }) {
-  const range = durationWordRanges[duration];
-  const sourceTypeLabel = sourceCategoryToSourceTypeLabel(candidate.sourceCategory);
+  const v = opts.verified;
+  const range = durationWordRanges[opts.duration];
+  const qJson = JSON.stringify(v.quote);
+  const skinNote = v.isSkinContext ?
+    "This line is under a skin-specific wiki block (e.g. {{csl|…}} or skin tab). You MUST label it clearly as alternate skin voice-over in notConfirmed and/or lineSuggests, and use canonStatus partially_verified unless the line is identical on base."
+  : "Parsed from the wiki /Audio page (community transcription). Remind viewers to confirm in the live client.";
 
-  const openingRules =
-    language === "French" ?
-      `La première phrase de script.fullScript DOIT commencer par :
-Quand ${candidate.speaker} dit «${candidate.quote}» à ${candidate.target || "le champion ciblé"}…
-(Réplique exacte entre guillemets français.)`
-    : language === "Spanish" ?
-      `La primera oración de script.fullScript DEBE empezar por:
-Cuando ${candidate.speaker} dice «${candidate.quote}» a ${candidate.target || "el campeón al que va dirigida la línea"}…`
-    : `The first sentence of script.fullScript MUST begin with:
-When ${candidate.speaker} says "${candidate.quote.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}" to ${candidate.target || "the champion this line is directed at"}…`;
+  return `PASS B — OFFICIAL RIOT LORE + ENGLISH SHORT-FORM SCRIPT (voice line is frozen; do not change one word of the quote).
 
-  return `PASS B — LORE RESEARCH + VIRAL SCRIPT (anchored to ONE real interaction only).
+LOCKED LINE (from Fandom LoL wiki champion /Audio pages — Category:LoL_Champion_audio):
+- Speaker: ${v.speaker}
+- Target: ${v.target}
+- Quote (verbatim): ${qJson}
+- Interaction type: ${v.interactionType}
+- Wiki section: ${v.wikiSection}
+- Source URL: ${v.sourceUrl}
+- Skin context flag: ${v.isSkinContext ? "true" : "false"}
+${skinNote}
 
-SELECTED VERIFIED LINE (from Pass A — treat as fixed truth for attribution; still separate canon facts from speculation in canonResearch):
-- Speaker: ${candidate.speaker}
-- Target / addressee: ${candidate.target}
-- Quote: ${candidate.quote}
-- Source category: ${candidate.sourceCategory}
-- Source reference hint: ${candidate.sourceReference}
-- Mapped source type label: ${sourceTypeLabel}
+User context (secondary): contentType=${opts.contentType}, topic=${opts.topic || "(none)"}, userQuoteHint=${opts.userQuote || "(none)"}, sourceTypeHint=${opts.sourceType}
 
-Original user inputs (context only): topic="${topic}", userQuote="${quote}", userSpeaker="${speaker}", userTarget="${target}", userSourceHint="${sourceType}", contentType="${contentType}"
+STEP 1 — Canon research (Riot Universe, official bios, official short stories, cinematics, events, official champion pages ONLY):
+- confirmedFacts: only what those official sources establish.
+- lineSuggests: careful "may suggest / could imply" readings tied to this quote.
+- notConfirmed: limits, unknowns, and anything not explicitly confirmed by Riot.
 
-STEP 2 — Canon research (Riot Universe, official bios, official stories, cinematics, events, official champion pages):
-- canonResearch.confirmedFacts: only what official Riot sources establish.
-- canonResearch.lineSuggests: what the line may imply — clearly labeled as interpretation.
-- canonResearch.notConfirmed: anything uncertain, fan theory, or "not officially confirmed in canon" style caveats when needed.
+STEP 2 — Script (English only):
+- metadata.language MUST be "en".
+- script.title / script.hook: TikTok-style, tied to THIS quote.
+- script.fullScript: English, ${opts.tone} tone, for ${opts.platform}, ~${range.min}-${range.max} words, ${opts.narrativeAngle} angle, audience ${opts.audienceLevel}, goal ${opts.creatorGoal}.
+- FIRST sentence of fullScript MUST follow: When ${v.speaker} says ${qJson} to ${v.target}, … (use straight double quotes around the quote as shown).
+- Include beat markers on their own lines: [0-3s], [7s], [14s], [21s], [28s], [35s], [42s], [50s] — each block advances the mystery; mini-hook about every 7 seconds.
+- No bullet characters in narration paragraphs.
+- Do not drift into a generic biography; stay on this interaction.
 
-STEP 3 — Script:
-- interaction fields MUST match the selected line (speaker, target, quote, sourceType="${sourceTypeLabel}", sourceReference echoing Pass A, canonStatus "verified" only if you are confident; otherwise "partially_verified").
-- script.title / hook: TikTok-style, non-generic, tied to THIS line.
-- script.fullScript: ${language}, ${tone} tone, for ${platform}, ~${range.min}-${range.max} words, ${narrativeAngle} angle, audience ${audienceLevel}, goal ${creatorGoal}.
-- NO bullet characters inside fullScript.
-- Do NOT pivot to a generic champion biography. Every paragraph must orbit this exact quote.
+STEP 3 — interaction JSON (must mirror the locked line):
+- speaker, target, quote: EXACT strings above.
+- interactionType: EXACT string above.
+- sourceType: "League of Legends champion audio page"
+- sourceReference: EXACT URL above.
+- canonStatus: ${v.isSkinContext ? '"partially_verified" (skin VO context)' : '"verified_voice_line"'}
 
-OPENING LINE (mandatory first sentence of fullScript):
-${openingRules}
+STEP 4 — hashtags: 4–8 strings, include #LeagueOfLegends or #LoL plus champion tags.
 
-metadata.language: en | fr | es matching spoken language.
-metadata.durationTarget: "${durationMetadataTarget(duration)}"
-metadata.formatVersion: "1.0"
+metadata.durationTarget: "${durationMetadataTarget(opts.duration)}"
+metadata.formatVersion: "${LOL_INTERACTION_FORMAT_VERSION}"
+metadata.sourceCategory: "${LOL_WIKI_AUDIO_CATEGORY_URL}"
 
-Output ONE JSON object matching the final production schema (interaction, canonResearch, script, metadata).`;
+Output ONE JSON object matching the production schema (interaction, canonResearch, script, metadata).`;
 }
 
 async function callOpenAiWithSchema(
@@ -489,9 +288,9 @@ export async function POST(request: NextRequest) {
   const durationTarget = durationMetadataTarget(duration);
   const normalizeOpts = { language: langCode, durationTarget };
 
-  if (mode === "custom" && !topic && !quote) {
+  if (mode === "custom" && !topic && !quote && !speaker && !target) {
     const body = failureLoLInteractionResponse({
-      notConfirmed: ["Enter an interaction, quote, or champion relationship before generating."],
+      notConfirmed: ["Enter a champion name, topic, or quote before generating."],
       language: langCode,
       durationTarget,
     });
@@ -509,92 +308,50 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const { primaryDisplay, secondaryDisplay } = resolveWikiFocus(speaker, target, topic);
+  if (!primaryDisplay.trim()) {
+    const body = failureLoLInteractionResponse({
+      notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE, "No champion name could be resolved from the request."],
+      language: langCode,
+      durationTarget,
+    });
+    return NextResponse.json(body);
+  }
 
-  const speakerHint = speaker.trim() || topic.trim().split(/\s+/)[0] || "";
-  const wikiExcerptBlock = await collectWikiExcerptsForDiscovery(speakerHint, target);
-
-  const discoveryUser = buildDiscoveryPrompt({
-    contentType,
-    topic,
-    quote,
-    speaker,
-    target,
-    sourceType,
-    wikiExcerptBlock,
-  });
-
-  let discoveryRaw = "";
+  let wikiResult: Awaited<ReturnType<typeof findChampionVoiceLineInteraction>> = null;
   try {
-    discoveryRaw = await callOpenAiWithSchema(openai, {
-      system:
-        "You find REAL League of Legends champion-to-champion voice lines from your knowledge of shipped Riot audio and scripts. You never fabricate quotes. If unsure, you mark low confidence. Output JSON only.",
-      user: discoveryUser,
-      schemaName: "lol_voice_line_discovery",
-      schema: OPENAI_VOICE_LINE_DISCOVERY_SCHEMA as unknown as Record<string, unknown>,
-      temperature: 0.25,
+    wikiResult = await findChampionVoiceLineInteraction({
+      primaryDisplay,
+      secondaryDisplay,
     });
-    devLoreLog("Pass A raw", discoveryRaw || "(empty)");
   } catch (error) {
-    console.error("[generate-lol-lore] discovery OpenAI failed", error);
-    const body = failureLoLInteractionResponse({
-      notConfirmed: ["Voice line discovery failed. Please try again."],
-      language: langCode,
-      durationTarget,
-    });
-    return NextResponse.json(body);
+    devLoreLog("wiki find error", error instanceof Error ? error.message : error);
   }
 
-  const discoveryParsed = parseOpenAiJsonContent(discoveryRaw);
-  if (!discoveryParsed.ok) {
-    const body = failureLoLInteractionResponse({
-      notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE, `Discovery JSON parse error: ${discoveryParsed.error}`],
-      language: langCode,
-      durationTarget,
-    });
-    devLoreLog("final JSON sent to client", body);
-    return NextResponse.json(body);
-  }
-
-  let discoveryPack = normalizeVoiceLineDiscoveryPack(discoveryParsed.value);
-  if (!discoveryPack) {
+  if (!wikiResult) {
     const body = failureLoLInteractionResponse({
       notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE],
       language: langCode,
       durationTarget,
     });
+    devLoreLog("final JSON sent to client (no wiki interaction)", body);
     return NextResponse.json(body);
   }
 
-  discoveryPack = alignDiscoveryConfidenceWithWiki(discoveryPack, wikiExcerptBlock);
-  devLoreLog("Pass A normalized discovery", discoveryPack);
+  const verified = wikiResult.selected;
+  devLoreLog("wiki-selected interaction", { ...verified, candidatesConsidered: wikiResult.candidatesConsidered });
 
-  const chosen = pickHighConfidenceCandidate(discoveryPack, { speaker: speakerHint, target, quote });
-  if (!chosen) {
-    const body = failureLoLInteractionResponse({
-      notConfirmed: [
-        NO_VERIFIED_VOICE_LINE_MESSAGE,
-        ...(discoveryPack.discoveryNotes.trim() ? [`Discovery notes: ${discoveryPack.discoveryNotes}`] : []),
-      ],
-      language: langCode,
-      durationTarget,
-    });
-    devLoreLog("final JSON sent to client (no high-confidence line)", body);
-    return NextResponse.json(body);
-  }
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const expansionUser = buildExpansionPrompt({
-    candidate: chosen,
+    verified,
     contentType,
     topic,
-    quote,
-    speaker,
-    target,
+    userQuote: quote || undefined,
     sourceType,
     tone,
     platform,
     duration,
-    language,
     narrativeAngle,
     audienceLevel,
     creatorGoal,
@@ -604,20 +361,17 @@ export async function POST(request: NextRequest) {
   try {
     expansionRaw = await callOpenAiWithSchema(openai, {
       system:
-        "You explain ONE verified League of Legends champion interaction: exact quote first, then official canon, then TikTok script. You never invent voice lines. You separate confirmed canon from implication. Output JSON only.",
+        "You are a League of Legends lore analyst. You NEVER invent voice lines. The wiki line in the user message is absolute ground truth for the quote text and speaker/target. You separate official Riot canon from speculation. Output JSON only.",
       user: expansionUser,
       schemaName: "lol_interaction_explainer",
       schema: OPENAI_LOL_INTERACTION_SCHEMA as unknown as Record<string, unknown>,
-      temperature: 0.55,
+      temperature: 0.45,
     });
-    devLoreLog("Pass B raw", expansionRaw || "(empty)");
+    devLoreLog("lore+script raw", expansionRaw || "(empty)");
   } catch (error) {
     console.error("[generate-lol-lore] expansion OpenAI failed", error);
     const body = failureLoLInteractionResponse({
-      notConfirmed: [
-        NO_VERIFIED_VOICE_LINE_MESSAGE,
-        "A high-confidence line was selected, but the lore/script pass failed. Try again.",
-      ],
+      notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE, "The lore and script generation step failed. Please try again."],
       language: langCode,
       durationTarget,
     });
@@ -634,39 +388,44 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
+  const forcedCanon = verified.isSkinContext ? ("partially_verified" as const) : ("verified_voice_line" as const);
+
   let normalized = normalizeLoLInteractionResponse(expansionParsed.value, normalizeOpts);
   normalized = {
     ...normalized,
     metadata: {
       ...normalized.metadata,
-      language: langCode,
+      language: "en",
       durationTarget,
-      formatVersion: normalized.metadata.formatVersion || "1.0",
+      formatVersion: normalized.metadata.formatVersion || LOL_INTERACTION_FORMAT_VERSION,
+      sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
     },
     interaction: {
       ...normalized.interaction,
-      speaker: chosen.speaker || normalized.interaction.speaker,
-      target: chosen.target || normalized.interaction.target,
-      quote: chosen.quote || normalized.interaction.quote,
-      sourceType: sourceCategoryToSourceTypeLabel(chosen.sourceCategory),
-      sourceReference: chosen.sourceReference || normalized.interaction.sourceReference,
+      speaker: verified.speaker,
+      target: verified.target,
+      quote: verified.quote,
+      interactionType: verified.interactionType,
+      sourceType: "League of Legends champion audio page",
+      sourceReference: verified.sourceUrl,
+      canonStatus: forcedCanon,
     },
   };
 
   const fs = normalized.script.fullScript.trim();
-  const anchored = quoteAnchorsScript(chosen.quote, fs);
-  const opensOk = scriptOpensWithRequiredPattern(language, fs);
+  const anchored = quoteAnchorsScript(verified.quote, fs);
+  const opensOk = scriptOpensWithWhenPattern(fs, verified.speaker, verified.quote, verified.target);
 
   if (!fs || !anchored || !opensOk) {
     const body = failureLoLInteractionResponse({
       notConfirmed: [
         NO_VERIFIED_VOICE_LINE_MESSAGE,
-        "The script pass did not anchor the narration to the selected quote with the required opening format. Try again or narrow champions/quote.",
+        "The generated script did not stay anchored to the wiki quote with the required English opening. Try again.",
       ],
       language: langCode,
       durationTarget,
     });
-    devLoreLog("rejected expansion (anchor/opening check)", { anchored, opensOk, snippet: fs.slice(0, 220) });
+    devLoreLog("rejected expansion (anchor/opening check)", { anchored, opensOk, snippet: fs.slice(0, 240) });
     return NextResponse.json(body);
   }
 

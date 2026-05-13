@@ -118,7 +118,7 @@ function downloadTextFile(fileName: string, content: string, mimeType = "text/pl
 }
 
 function scriptAsText(pack: LoLInteractionExplainerResponse) {
-  const { speaker, quote, target, sourceType, sourceReference, canonStatus } = pack.interaction;
+  const { speaker, quote, target, sourceType, sourceReference, canonStatus, interactionType } = pack.interaction;
   return [
     "Title:",
     pack.script.title,
@@ -126,24 +126,26 @@ function scriptAsText(pack: LoLInteractionExplainerResponse) {
     "Hook:",
     pack.script.hook,
     "",
-    "Interaction:",
-    `${speaker || "(unspecified)"} says:`,
+    "INTERACTION FOUND",
+    `Champion speaking: ${speaker || "(unspecified)"}`,
+    `Target: ${target || "(unspecified)"}`,
+    "",
+    "Exact voice line:",
     `"${quote}"`,
     "",
-    "To:",
-    target || "(unspecified)",
+    `Interaction type: ${interactionType || "—"}`,
     "",
     `Source type: ${sourceType}`,
-    `Source reference: ${sourceReference}`,
+    `Source: ${sourceReference}`,
     `Canon status: ${canonStatus}`,
     "",
     "Confirmed facts:",
     ...(pack.canonResearch.confirmedFacts.length ? pack.canonResearch.confirmedFacts.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Line suggests:",
+    "What the line suggests:",
     ...(pack.canonResearch.lineSuggests.length ? pack.canonResearch.lineSuggests.map((line) => `- ${line}`) : ["- (none)"]),
     "",
-    "Not confirmed:",
+    "What is not confirmed:",
     ...(pack.canonResearch.notConfirmed.length ? pack.canonResearch.notConfirmed.map((line) => `- ${line}`) : ["- (none)"]),
     "",
     "Full script:",
@@ -159,6 +161,7 @@ function scriptAsText(pack: LoLInteractionExplainerResponse) {
     `language: ${pack.metadata.language}`,
     `durationTarget: ${pack.metadata.durationTarget}`,
     `formatVersion: ${pack.metadata.formatVersion}`,
+    `sourceCategory: ${pack.metadata.sourceCategory}`,
   ].join("\n");
 }
 
@@ -183,7 +186,7 @@ function progressForState({
   if (isLoreGenerating) {
     return {
       label: "Analyzing champion interaction",
-      detail: "Calling OpenAI with strict JSON schema, then normalizing the pack for the UI.",
+      detail: "Fetching wiki /Audio lines from the Fandom category, then one OpenAI pass for canon + English script.",
       percent: 44,
       steps: ["Structured JSON", "Normalize fields", "Ready to edit"],
     };
@@ -344,8 +347,14 @@ export default function HomePage() {
     event.preventDefault();
     setLoreError("");
 
-    if (generationMode === "custom" && !loreTopic.trim() && !interactionQuote.trim()) {
-      setLoreError("Enter an interaction, quote, or champion relationship before generating.");
+    if (
+      generationMode === "custom" &&
+      !loreTopic.trim() &&
+      !interactionQuote.trim() &&
+      !speakerChampion.trim() &&
+      !targetChampion.trim()
+    ) {
+      setLoreError("Enter a champion name, topic, or quote before generating.");
       return;
     }
 
@@ -797,8 +806,18 @@ export default function HomePage() {
                     <p className="text-sm font-semibold uppercase tracking-[0.24em] text-emerald-100/70">Production pack ready</p>
                     <h2 className="mt-1 text-2xl font-bold text-white">{loreResult.script.title}</h2>
                     <p className="mt-2 text-sm text-emerald-100/75">
-                      Format v{loreResult.metadata.formatVersion} · {loreResult.metadata.language} · {loreResult.metadata.durationTarget} · Canon:{" "}
-                      {loreResult.interaction.canonStatus.replace(/_/g, " ")}
+                      Format v{loreResult.metadata.formatVersion} · {loreResult.metadata.language} · {loreResult.metadata.durationTarget} ·{" "}
+                      {loreResult.metadata.sourceCategory ? (
+                        <a
+                          href={loreResult.metadata.sourceCategory}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="underline decoration-emerald-200/40 underline-offset-2 hover:text-white"
+                        >
+                          Wiki audio category
+                        </a>
+                      ) : null}{" "}
+                      · Canon: {loreResult.interaction.canonStatus.replace(/_/g, " ")}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -848,17 +867,41 @@ export default function HomePage() {
 
                   <section className="rounded-3xl border border-white/10 bg-slate-950/55 p-5">
                     <div className="mb-4">
-                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction</p>
-                      <h3 className="mt-1 text-xl font-bold text-white">{loreResult.interaction.speaker || "Speaker"} says</h3>
+                      <p className="text-sm uppercase tracking-[0.24em] text-cyan-200/70">Interaction found</p>
+                      <h3 className="mt-1 text-xl font-bold text-white">Champion speaking: {loreResult.interaction.speaker || "—"}</h3>
                     </div>
                     <blockquote className="rounded-2xl border border-cyan-300/15 bg-cyan-300/[0.06] p-4 text-lg font-semibold leading-8 text-cyan-50">
                       &ldquo;{loreResult.interaction.quote || "—"}&rdquo;
                     </blockquote>
                     <div className="mt-4 grid gap-3 text-sm text-slate-300">
-                      <p><span className="font-bold text-white">To:</span> {loreResult.interaction.target || "—"}</p>
-                      <p><span className="font-bold text-white">Source:</span> {loreResult.interaction.sourceType || "—"}</p>
-                      <p><span className="font-bold text-white">Source reference:</span> {loreResult.interaction.sourceReference || "—"}</p>
-                      <p><span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus}</p>
+                      <p>
+                        <span className="font-bold text-white">Target:</span> {loreResult.interaction.target || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Interaction type:</span>{" "}
+                        {loreResult.interaction.interactionType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source type:</span> {loreResult.interaction.sourceType || "—"}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Source:</span>{" "}
+                        {loreResult.interaction.sourceReference?.startsWith("http") ? (
+                          <a
+                            href={loreResult.interaction.sourceReference}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-cyan-200 underline decoration-cyan-400/30 underline-offset-2 hover:text-white"
+                          >
+                            {loreResult.interaction.sourceReference}
+                          </a>
+                        ) : (
+                          loreResult.interaction.sourceReference || "—"
+                        )}
+                      </p>
+                      <p>
+                        <span className="font-bold text-white">Canon status:</span> {loreResult.interaction.canonStatus.replace(/_/g, " ")}
+                      </p>
                     </div>
                   </section>
 
@@ -1003,15 +1046,15 @@ export default function HomePage() {
                   <TextResultCard title="Full script (generated)" value={loreResult.script.fullScript} multiline />
                   <ListResultCard title="Hashtags" items={loreResult.script.hashtags.length ? loreResult.script.hashtags : ["(none)"]} />
                   <ListResultCard
-                    title="Canon research — confirmed facts"
+                    title="Canon explanation — confirmed facts"
                     items={loreResult.canonResearch.confirmedFacts.length ? loreResult.canonResearch.confirmedFacts : ["(none)"]}
                   />
                   <ListResultCard
-                    title="Canon research — line suggests"
+                    title="Canon explanation — what the line suggests"
                     items={loreResult.canonResearch.lineSuggests.length ? loreResult.canonResearch.lineSuggests : ["(none)"]}
                   />
                   <ListResultCard
-                    title="Canon research — not confirmed"
+                    title="Canon explanation — what is not confirmed"
                     items={loreResult.canonResearch.notConfirmed.length ? loreResult.canonResearch.notConfirmed : ["(none)"]}
                   />
                 </div>

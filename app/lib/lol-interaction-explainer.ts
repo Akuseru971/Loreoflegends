@@ -2,7 +2,7 @@
  * Shared contract for POST /api/generate-lol-lore — used by API route and client UI.
  */
 
-export type LoLCanonStatus = "verified" | "partially_verified" | "unconfirmed";
+export type LoLCanonStatus = "verified" | "partially_verified" | "unconfirmed" | "verified_voice_line";
 
 export type LoLInteractionExplainerResponse = {
   interaction: {
@@ -11,6 +11,7 @@ export type LoLInteractionExplainerResponse = {
     quote: string;
     sourceType: string;
     sourceReference: string;
+    interactionType: string;
     canonStatus: LoLCanonStatus;
   };
   canonResearch: {
@@ -29,81 +30,15 @@ export type LoLInteractionExplainerResponse = {
     language: string;
     durationTarget: string;
     formatVersion: string;
+    sourceCategory: string;
   };
 };
 
 export const LOL_INTERACTION_FORMAT_VERSION = "1.0";
 
-/** Shown when the model cannot commit to a real, verifiable champion-to-champion line. */
+/** Shown when no champion-to-champion line could be read from Fandom /Audio pages. */
 export const NO_VERIFIED_VOICE_LINE_MESSAGE =
-  "No verified voice line interaction was found for this request. Please try another champion or champion pair.";
-
-/** Pass A — find real voice-line candidates (model memory only; must not invent quotes). */
-export const OPENAI_VOICE_LINE_DISCOVERY_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  required: ["candidates", "selectedCandidateIndex", "discoveryNotes"],
-  properties: {
-    candidates: {
-      type: "array",
-      maxItems: 8,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: [
-          "speaker",
-          "target",
-          "quote",
-          "sourceCategory",
-          "sourceReference",
-          "confidence",
-          "whyInteresting",
-        ],
-        properties: {
-          speaker: { type: "string" },
-          target: { type: "string" },
-          quote: { type: "string" },
-          sourceCategory: {
-            type: "string",
-            enum: [
-              "league_base_special",
-              "league_skin",
-              "cinematic_or_story",
-              "lor",
-              "wild_rift",
-              "old_removed",
-              "unknown",
-            ],
-          },
-          sourceReference: { type: "string" },
-          confidence: {
-            type: "string",
-            enum: ["high", "medium", "low"],
-          },
-          whyInteresting: { type: "string" },
-        },
-      },
-    },
-    selectedCandidateIndex: { type: "integer", minimum: -1, maximum: 7 },
-    discoveryNotes: { type: "string" },
-  },
-} as const;
-
-export type VoiceLineDiscoveryCandidate = {
-  speaker: string;
-  target: string;
-  quote: string;
-  sourceCategory: string;
-  sourceReference: string;
-  confidence: "high" | "medium" | "low";
-  whyInteresting: string;
-};
-
-export type VoiceLineDiscoveryPack = {
-  candidates: VoiceLineDiscoveryCandidate[];
-  selectedCandidateIndex: number;
-  discoveryNotes: string;
-};
+  "No verified voice line interaction was found from the champion audio pages.";
 
 /** OpenAI `json_schema.schema` value (strict mode: every key listed in `required`). */
 export const OPENAI_LOL_INTERACTION_SCHEMA = {
@@ -114,16 +49,17 @@ export const OPENAI_LOL_INTERACTION_SCHEMA = {
     interaction: {
       type: "object",
       additionalProperties: false,
-      required: ["speaker", "target", "quote", "sourceType", "sourceReference", "canonStatus"],
+      required: ["speaker", "target", "quote", "sourceType", "sourceReference", "interactionType", "canonStatus"],
       properties: {
         speaker: { type: "string" },
         target: { type: "string" },
         quote: { type: "string" },
         sourceType: { type: "string" },
         sourceReference: { type: "string" },
+        interactionType: { type: "string" },
         canonStatus: {
           type: "string",
-          enum: ["verified", "partially_verified", "unconfirmed"],
+          enum: ["verified", "partially_verified", "unconfirmed", "verified_voice_line"],
         },
       },
     },
@@ -164,17 +100,18 @@ export const OPENAI_LOL_INTERACTION_SCHEMA = {
     metadata: {
       type: "object",
       additionalProperties: false,
-      required: ["language", "durationTarget", "formatVersion"],
+      required: ["language", "durationTarget", "formatVersion", "sourceCategory"],
       properties: {
         language: { type: "string" },
         durationTarget: { type: "string" },
         formatVersion: { type: "string" },
+        sourceCategory: { type: "string" },
       },
     },
   },
 } as const;
 
-const CANON_STATUSES: LoLCanonStatus[] = ["verified", "partially_verified", "unconfirmed"];
+const CANON_STATUSES: LoLCanonStatus[] = ["verified", "partially_verified", "unconfirmed", "verified_voice_line"];
 
 function ensureString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
@@ -193,6 +130,8 @@ function ensureCanonStatus(value: unknown): LoLCanonStatus {
     : "unconfirmed";
 }
 
+const WIKI_AUDIO_CATEGORY_URL = "https://wiki.leagueoflegends.com/en-us/Category:LoL_Champion_audio";
+
 export function failureLoLInteractionResponse(overrides?: {
   notConfirmed?: string[];
   title?: string;
@@ -204,8 +143,9 @@ export function failureLoLInteractionResponse(overrides?: {
       speaker: "",
       target: "",
       quote: "",
-      sourceType: "",
-      sourceReference: "",
+      sourceType: "League of Legends champion audio page",
+      sourceReference: WIKI_AUDIO_CATEGORY_URL,
+      interactionType: "",
       canonStatus: "unconfirmed",
     },
     canonResearch: {
@@ -214,10 +154,10 @@ export function failureLoLInteractionResponse(overrides?: {
       notConfirmed:
         overrides?.notConfirmed?.length ?
           overrides.notConfirmed
-        : ["No verified character-to-character interaction was found for this request."],
+        : [NO_VERIFIED_VOICE_LINE_MESSAGE],
     },
     script: {
-      title: overrides?.title ?? "No verified interaction found",
+      title: overrides?.title ?? "No verified voice line found",
       hook: "",
       fullScript: "",
       caption: "",
@@ -227,6 +167,7 @@ export function failureLoLInteractionResponse(overrides?: {
       language: overrides?.language ?? "en",
       durationTarget: overrides?.durationTarget ?? "45-60s",
       formatVersion: LOL_INTERACTION_FORMAT_VERSION,
+      sourceCategory: WIKI_AUDIO_CATEGORY_URL,
     },
   };
 }
@@ -267,6 +208,7 @@ export function normalizeLoLInteractionResponse(
       quote: ensureString(interaction.quote),
       sourceType: ensureString(interaction.sourceType),
       sourceReference: ensureString(interaction.sourceReference),
+      interactionType: ensureString(interaction.interactionType),
       canonStatus: ensureCanonStatus(interaction.canonStatus),
     },
     canonResearch: {
@@ -285,6 +227,7 @@ export function normalizeLoLInteractionResponse(
       language: ensureString(metadata.language, defaults.language) || defaults.language,
       durationTarget: ensureString(metadata.durationTarget, defaults.durationTarget) || defaults.durationTarget,
       formatVersion: ensureString(metadata.formatVersion, LOL_INTERACTION_FORMAT_VERSION) || LOL_INTERACTION_FORMAT_VERSION,
+      sourceCategory: ensureString(metadata.sourceCategory, WIKI_AUDIO_CATEGORY_URL) || WIKI_AUDIO_CATEGORY_URL,
     },
   };
 }
@@ -331,77 +274,6 @@ export function uiLanguageToMetadataCode(label: string): string {
     return "es";
   }
   return "en";
-}
-
-const CONFIDENCE_LEVELS = ["high", "medium", "low"] as const;
-type ConfidenceLevel = (typeof CONFIDENCE_LEVELS)[number];
-
-function ensureConfidence(value: unknown): ConfidenceLevel {
-  return typeof value === "string" && CONFIDENCE_LEVELS.includes(value as ConfidenceLevel)
-    ? (value as ConfidenceLevel)
-    : "low";
-}
-
-const SOURCE_CATEGORIES = [
-  "league_base_special",
-  "league_skin",
-  "cinematic_or_story",
-  "lor",
-  "wild_rift",
-  "old_removed",
-  "unknown",
-] as const;
-
-function ensureSourceCategory(value: unknown): string {
-  return typeof value === "string" && SOURCE_CATEGORIES.includes(value as (typeof SOURCE_CATEGORIES)[number])
-    ? value
-    : "unknown";
-}
-
-/**
- * Normalizes pass-A discovery JSON. Returns null only if structure is unusable.
- */
-export function normalizeVoiceLineDiscoveryPack(value: unknown): VoiceLineDiscoveryPack | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const root = value as Record<string, unknown>;
-  const rawCandidates = root.candidates;
-  if (!Array.isArray(rawCandidates)) {
-    return null;
-  }
-
-  const candidates: VoiceLineDiscoveryCandidate[] = [];
-  for (const item of rawCandidates.slice(0, 8)) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const row = item as Record<string, unknown>;
-    candidates.push({
-      speaker: ensureString(row.speaker),
-      target: ensureString(row.target),
-      quote: ensureString(row.quote),
-      sourceCategory: ensureSourceCategory(row.sourceCategory),
-      sourceReference: ensureString(row.sourceReference),
-      confidence: ensureConfidence(row.confidence),
-      whyInteresting: ensureString(row.whyInteresting),
-    });
-  }
-
-  let selectedCandidateIndex = -1;
-  if (typeof root.selectedCandidateIndex === "number" && Number.isInteger(root.selectedCandidateIndex)) {
-    selectedCandidateIndex = Math.min(7, Math.max(-1, root.selectedCandidateIndex));
-  }
-
-  if (selectedCandidateIndex >= candidates.length) {
-    selectedCandidateIndex = -1;
-  }
-
-  return {
-    candidates,
-    selectedCandidateIndex,
-    discoveryNotes: ensureString(root.discoveryNotes),
-  };
 }
 
 export function sourceCategoryToSourceTypeLabel(category: string): string {
