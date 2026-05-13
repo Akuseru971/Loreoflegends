@@ -18,11 +18,13 @@ function wikiPageTitleFromAudioPageUrl(url: string): string {
 }
 
 const EXPLORER_LOADING_STAGES = [
-  "Loading champion audio index…",
-  "Finding the correct champion page…",
-  "Fetching champion audio page…",
+  "Searching champion audio index…",
+  "Finding the correct champion page with OpenAI…",
+  "Opening champion audio page…",
   "Extracting written interactions…",
 ] as const;
+
+const EXPLORER_SUCCESS_LINE = "Interactions found.";
 
 const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
 const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
@@ -288,8 +290,6 @@ export default function HomePage() {
   type ExplorerInteractionsResponse = {
     selectedChampion: string;
     slug: string;
-    championAudioPageFound?: boolean;
-    sourceCategory?: string;
     audioPageUrl: string;
     interactions: ExplorerApiInteraction[];
     count: number;
@@ -410,8 +410,12 @@ export default function HomePage() {
       setExplorerLoadingTick(0);
       setExplorerInteractionsError("");
       try {
-        const enc = encodeURIComponent(selectedExplorerSlug);
-        const res = await fetch(`/api/champions/${enc}/interactions`);
+        const championName = decodeURIComponent(selectedExplorerSlug).split("/")[0]?.replace(/_/g, " ") ?? "";
+        const res = await fetch("/api/find-champion-interactions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ champion: championName }),
+        });
         const data = await res.json();
         if (cancelled) {
           return;
@@ -480,8 +484,12 @@ export default function HomePage() {
     setExplorerLoadingTick(0);
     setExplorerInteractionsError("");
     try {
-      const enc = encodeURIComponent(selectedExplorerSlug);
-      const res = await fetch(`/api/champions/${enc}/interactions?refresh=1`);
+      const championName = decodeURIComponent(selectedExplorerSlug).split("/")[0]?.replace(/_/g, " ") ?? "";
+      const res = await fetch("/api/find-champion-interactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ champion: championName }),
+      });
       const data = await res.json();
       if (!res.ok) {
         setExplorerInteractions(null);
@@ -1101,10 +1109,10 @@ export default function HomePage() {
                     ) : (
                       "LoL champion audio category"
                     )}
-                    . The server fetches the category HTML, extracts real audio links, uses OpenAI only to pick the
-                    correct link for the selected name (from that list), then fetches the champion page and extracts
-                    written lines (OpenAI structures interactions from the provided page text; quotes are
-                    validated). No .ogg download or transcription.
+                    . The server fetches the category page, sends its links and visible text to OpenAI to pick the
+                    correct <code className="text-cyan-100/90">/LoL/Audio</code> URL (never invented), then fetches that
+                    page and sends the visible text to OpenAI to extract written champion-to-champion lines (quotes
+                    must appear verbatim in that text). No .ogg download or transcription.
                   </p>
                 </div>
                 {explorerChampionsLoading ? (
@@ -1209,10 +1217,15 @@ export default function HomePage() {
                   {explorerInteractions && !explorerInteractionsLoading ? (
                     <>
                       <p className="text-sm text-slate-300">
+                        {!explorerInteractions.error ? (
+                          <>
+                            <span className="font-semibold text-cyan-200">{EXPLORER_SUCCESS_LINE}</span>{" "}
+                          </>
+                        ) : null}
                         <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> —{" "}
                         <span className="text-cyan-200">{explorerInteractions.count}</span> written champion interaction
-                        {explorerInteractions.count === 1 ? "" : "s"} from their Fandom audio page (category index → matched
-                        link → page text → structured lines).
+                        {explorerInteractions.count === 1 ? "" : "s"} (category index → OpenAI link match → page fetch →
+                        OpenAI extraction).
                       </p>
 
                       <div className="grid gap-3 sm:grid-cols-3">

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChampionInteractionsBundle } from "@/app/lib/fandom-champion-interaction-service";
+import { runFindChampionInteractionsPipeline } from "@/app/lib/find-champion-interactions-pipeline";
 
 export const runtime = "nodejs";
 
@@ -8,9 +8,8 @@ export async function GET(request: NextRequest, context: { params: Promise<{ cha
   if (!champion?.trim()) {
     return NextResponse.json({ error: "Missing champion parameter." }, { status: 400 });
   }
-  const refresh = request.nextUrl.searchParams.get("refresh") === "1";
   try {
-    const data = await getChampionInteractionsBundle(champion, { refresh });
+    const data = await runFindChampionInteractionsPipeline(champion);
     return NextResponse.json(data);
   } catch (error) {
     console.error("[api/champions/.../interactions]", error);
