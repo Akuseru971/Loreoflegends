@@ -1,10 +1,15 @@
 /**
- * Deterministic Fandom fetching: category HTML → champion /LoL/Audio links → page HTML → visible text.
- * OpenAI is not used here. No audio download or playback.
+ * Deterministic Fandom fetching: category HTML → champion /LoL/Audio link candidates → page HTML → visible text.
+ * No audio download or playback.
  */
 
 import * as cheerio from "cheerio";
-import { toWikiChampionKey, wikiFandomArticleUrl } from "@/app/lib/lol-wiki-audio";
+import {
+  LOL_WIKI_AUDIO_CATEGORY_URL,
+  extractChampionAudioPageLinksFromCategory,
+  toWikiChampionKey,
+  wikiFandomArticleUrl,
+} from "@/app/lib/lol-wiki-audio";
 
 const FANDOM_ORIGIN = "https://leagueoflegends.fandom.com";
 
@@ -66,6 +71,13 @@ export type ChampionAudioLink = {
   wikiKey: string;
 };
 
+/** Link row extracted from the category page (for OpenAI disambiguation). */
+export type FandomChampionAudioLinkCandidate = {
+  label: string;
+  href: string;
+  url: string;
+};
+
 /**
  * Parse category HTML for links matching /wiki/[Champion]/LoL/Audio
  */
@@ -125,6 +137,107 @@ export function extractLinksFromCategoryPage(html: string): ChampionAudioLink[] 
   return out;
 }
 
+/**
+ * Same links as {@link extractLinksFromCategoryPage}, with anchor label + href preserved for LLM matching.
+ */
+export function extractChampionAudioLinkCandidatesFromCategoryHtml(html: string): FandomChampionAudioLinkCandidate[] {
+  const rows = extractLinksFromCategoryPage(html);
+  if (!html?.trim() || !rows.length) {
+    return [];
+  }
+  const $ = cheerio.load(html);
+  const byUrl = new Map<string, { label: string; href: string }>();
+
+  $('a[href*="/LoL/Audio"]').each((_, el) => {
+    const rawHref = $(el).attr("href")?.trim();
+    if (!rawHref) {
+      return;
+    }
+    let pathname: string;
+    try {
+      const u = new URL(rawHref, FANDOM_ORIGIN);
+      if (!u.hostname.toLowerCase().endsWith("fandom.com")) {
+        return;
+      }
+      pathname = u.pathname;
+    } catch {
+      return;
+    }
+    const m = pathname.match(/^\/wiki\/([^#]+?)\/LoL\/Audio\/?$/i);
+    if (!m?.[1] || /:/i.test(m[1])) {
+      return;
+    }
+    const wikiKey = decodeURIComponent(m[1]).replace(/ /g, "_");
+    const lower = wikiKey.toLowerCase();
+    if (
+      lower.startsWith("category:") ||
+      lower.startsWith("file:") ||
+      lower.startsWith("template:") ||
+      lower.startsWith("special:") ||
+      lower.startsWith("user:")
+    ) {
+      return;
+    }
+    const url = wikiFandomArticleUrl(`${wikiKey}/LoL/Audio`);
+    const label = $(el).text().replace(/\s+/g, " ").trim() || `${wikiKey}/LoL/Audio`;
+    const href = `/wiki/${wikiKey}/LoL/Audio`;
+    if (!byUrl.has(url)) {
+      byUrl.set(url, { label, href });
+    }
+  });
+
+  const out: FandomChampionAudioLinkCandidate[] = [];
+  for (const r of rows) {
+    const meta = byUrl.get(r.fullUrl);
+    out.push({
+      label: meta?.label ?? `${r.wikiKey}/LoL/Audio`,
+      href: meta?.href ?? `/wiki/${r.wikiKey}/LoL/Audio`,
+      url: r.fullUrl,
+    });
+  }
+  out.sort((a, b) => a.label.localeCompare(b.label));
+  return out;
+}
+
+/**
+ * Fetch the LoL champion audio category page and extract /LoL/Audio link candidates.
+ * Falls back to MediaWiki API if the HTML fetch yields too few links.
+ */
+export async function fetchAndExtractChampionAudioLinks(): Promise<{
+  ok: boolean;
+  status: number;
+  htmlLength: number;
+  candidates: FandomChampionAudioLinkCandidate[];
+  error?: string;
+}> {
+  const catRes = await fetchFandomPage(LOL_WIKI_AUDIO_CATEGORY_URL);
+  let candidates =
+    catRes.ok && catRes.html.length > 500 ? extractChampionAudioLinkCandidatesFromCategoryHtml(catRes.html) : [];
+
+  if (candidates.length < 8) {
+    log("fetch_candidates_fallback_api", { priorCount: candidates.length });
+    const titles = await extractChampionAudioPageLinksFromCategory();
+    candidates = titles.map((t) => {
+      const wikiKey = t.replace(/\/LoL\/Audio$/i, "");
+      const url = wikiFandomArticleUrl(t);
+      return {
+        label: `${wikiKey}/LoL/Audio`,
+        href: `/wiki/${wikiKey}/LoL/Audio`,
+        url,
+      };
+    });
+  }
+
+  log("fetch_and_extract_done", { status: catRes.status, htmlLength: catRes.html.length, candidateCount: candidates.length });
+  return {
+    ok: catRes.ok,
+    status: catRes.status,
+    htmlLength: catRes.html.length,
+    candidates,
+    ...(catRes.ok ? {} : { error: catRes.error ?? `HTTP ${catRes.status}` }),
+  };
+}
+
 /** Fold string for fuzzy champion matching (accents, punctuation, apostrophes, ampersand). */
 export function normalizeChampionMatchKey(input: string): string {
   const s = input
@@ -179,9 +292,14 @@ export function findChampionAudioUrl(championName: string, links: ChampionAudioL
   return null;
 }
 
-/** Convenience: fetch a champion audio article by absolute URL. */
+/** Fetch a champion LoL audio wiki page; logs HTTP status (always) and extra detail in development. */
 export async function fetchChampionAudioPage(audioPageUrl: string): Promise<FetchFandomPageResult> {
-  return fetchFandomPage(audioPageUrl);
+  const res = await fetchFandomPage(audioPageUrl);
+  log("champion_audio_page_fetch", { url: audioPageUrl, ok: res.ok, status: res.status, htmlLength: res.html.length });
+  if (process.env.NODE_ENV === "development") {
+    console.info(`${LOG_PREFIX} champion_audio_page_fetch_dev`, { finalUrl: res.finalUrl, error: res.error });
+  }
+  return res;
 }
 
 /**
@@ -200,12 +318,18 @@ export function extractVisibleTextFromHtml(html: string): string {
     "[role='navigation'], nav, header, footer, #mixed-content-footer, .global-navigation, .WikiaRail, .rail-placeholder, .gpt-ad, .ad-slot, .adsbygoogle",
   ).remove();
   $("audio, video, source, .ext-audiobutton, .skin-play-button, .audio-button").remove();
+  $('a[href$=".ogg"], a[href*=".ogg"]').remove();
 
   const root = $(".mw-parser-output").first();
   const text = root.length ? root.text() : $("article .mw-body-content").text() || $("body").text();
 
   const collapsed = text.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
   return collapsed;
+}
+
+/** Visible article text from a champion /LoL/Audio HTML document (browser or parse API). */
+export function extractVisibleTextFromChampionAudioPage(html: string): string {
+  return extractVisibleTextFromHtml(html);
 }
 
 export function logExtractedTextDebug(extractedText: string, stage: string): void {

@@ -1,35 +1,36 @@
 /**
- * Live Fandom explorer: fetch category HTML for /LoL/Audio links, match champion deterministically,
- * fetch champion audio HTML and visible text, optionally structure lines with OpenAI from that text only,
- * and merge with HTML+wikitext parsing. No audio download, playback, or transcription.
+ * Fandom explorer: fetch category → extract real /LoL/Audio link candidates → OpenAI picks the champion URL
+ * (validated against candidates) with deterministic fallback → fetch audio page → visible text → OpenAI extracts
+ * interactions from that text (quote-validated) merged with HTML/wikitext parsing. No audio download.
  */
 
 import { extractWrittenInteractionsFromParsedHtml, fetchFandomParsedHtml, fandomHtmlToSearchPlainText } from "@/app/lib/fandom-audio-html";
 import {
-  extractWrittenInteractionsWithOpenAiIfConfigured,
+  extractWrittenInteractionsWithOpenAI,
+  findChampionAudioPageWithOpenAI,
   openAiFandomInteractionAgentEnabled,
+  wikiChampionKeyFromAudioPageUrl,
   type RawWrittenInteractionFromPage,
 } from "@/app/lib/fandom-openai-agent";
 import {
   LOL_WIKI_AUDIO_CATEGORY_URL,
   championKeyToLoLAudioPageTitle,
-  extractChampionAudioPageLinksFromCategory,
-  fetchWikitextBatch,
   getChampionLoLAudioWikitext,
   parseWikiVoiceInteractions,
   toWikiChampionKey,
-  wikiFandomArticleUrl,
-  wikitextReferencesChampionCi,
   type WikiVoiceInteraction,
 } from "@/app/lib/lol-wiki-audio";
 import {
-  extractLinksFromCategoryPage,
-  extractVisibleTextFromHtml,
+  extractVisibleTextFromChampionAudioPage,
+  fetchAndExtractChampionAudioLinks,
   fetchChampionAudioPage,
-  fetchFandomPage,
   findChampionAudioUrl,
   logExtractedTextDebug,
+  type ChampionAudioLink,
+  type FandomChampionAudioLinkCandidate,
 } from "@/app/lib/fandom-page-fetch";
+
+export const WRITTEN_INTERACTION_SOURCE_TYPE = "Written interaction from Fandom champion audio page" as const;
 
 export type FandomInteractionMinimal = {
   speaker: string;
@@ -38,9 +39,10 @@ export type FandomInteractionMinimal = {
   interactionType: string;
   section: string;
   sourceUrl: string;
+  sourcePageTitle: string;
+  sourceType: typeof WRITTEN_INTERACTION_SOURCE_TYPE;
+  isSkinContext: boolean;
 };
-
-export const WRITTEN_INTERACTION_SOURCE_TYPE = "Written interaction from Fandom champion audio page" as const;
 
 export type ChampionListEntry = {
   name: string;
@@ -187,56 +189,25 @@ function toApiRow(r: WikiVoiceInteraction): WrittenInteractionPayload {
   };
 }
 
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) {
-    h = (h + s.charCodeAt(i) * (i + 3)) % 10007;
-  }
-  return h;
-}
-
-const MAX_PROBE_PAGES = 72;
-
-async function probePagesMentioningChampion(
-  championKey: string,
-  championDisplay: string,
-  primaryTitle: string,
-  allTitles: string[],
-): Promise<void> {
-  const sorted = [...allTitles].sort((a, b) => a.localeCompare(b));
-  if (!sorted.length) {
-    return;
-  }
-  let probed = 0;
-  const offset = hashString(championKey) % sorted.length;
-  const skip = new Set<string>([primaryTitle.toLowerCase()]);
-
-  for (let i = 0; i < sorted.length && probed < MAX_PROBE_PAGES; i++) {
-    const title = sorted[(offset + i) % sorted.length]!;
-    const tl = title.toLowerCase();
-    if (skip.has(tl)) {
-      continue;
-    }
-    skip.add(tl);
-    const wt = await getChampionLoLAudioWikitext(title);
-    if (!wt) {
-      continue;
-    }
-    if (!wikitextReferencesChampionCi(wt, championKey, championDisplay)) {
-      continue;
-    }
-    probed++;
-    await parseAndCacheLoLAudioPage(title);
-  }
-}
-
 const BUNDLE_LOG = "[fandom-interactions-bundle]";
 
 function logBundle(stage: string, detail: Record<string, unknown>): void {
   console.info(`${BUNDLE_LOG} ${stage}`, detail);
 }
 
-function toMinimalInteractions(rows: WrittenInteractionPayload[]): FandomInteractionMinimal[] {
+function candidatesToChampionLinks(candidates: FandomChampionAudioLinkCandidate[]): ChampionAudioLink[] {
+  const out: ChampionAudioLink[] = [];
+  for (const c of candidates) {
+    const key = wikiChampionKeyFromAudioPageUrl(c.url);
+    if (!key) {
+      continue;
+    }
+    out.push({ name: key.replace(/_/g, " "), fullUrl: c.url, wikiKey: key });
+  }
+  return out;
+}
+
+function toMinimalFromPayload(rows: WrittenInteractionPayload[]): FandomInteractionMinimal[] {
   return rows.map((r) => ({
     speaker: r.speaker,
     target: r.target,
@@ -244,6 +215,9 @@ function toMinimalInteractions(rows: WrittenInteractionPayload[]): FandomInterac
     interactionType: r.interactionType,
     section: r.section,
     sourceUrl: r.sourceUrl,
+    sourcePageTitle: r.sourcePageTitle,
+    sourceType: r.sourceType,
+    isSkinContext: r.isSkinContext,
   }));
 }
 
@@ -252,27 +226,23 @@ export async function getChampionListForApi(): Promise<{
   sourceCategory: string;
   count: number;
 }> {
-  const catRes = await fetchFandomPage(LOL_WIKI_AUDIO_CATEGORY_URL);
-  logBundle("category_fetch", { ok: catRes.ok, status: catRes.status, htmlLen: catRes.html.length });
-
-  let links =
-    catRes.ok && catRes.html.length > 500 ? extractLinksFromCategoryPage(catRes.html) : [];
-
-  if (links.length < 8) {
-    logBundle("category_links_fallback_api", { priorCount: links.length });
-    const titles = await extractChampionAudioPageLinksFromCategory();
-    links = titles.map((t) => {
-      const wikiKey = t.replace(/\/LoL\/Audio$/i, "");
-      return {
-        name: wikiKey.replace(/_/g, " "),
-        fullUrl: wikiFandomArticleUrl(t),
-        wikiKey,
-      };
-    });
+  const cat = await fetchAndExtractChampionAudioLinks();
+  logBundle("champion_list_category", {
+    ok: cat.ok,
+    status: cat.status,
+    htmlLen: cat.htmlLength,
+    linkCount: cat.candidates.length,
+  });
+  if (process.env.NODE_ENV === "development") {
+    console.info(`${BUNDLE_LOG} champion_list_first_candidates`, cat.candidates.slice(0, 10));
   }
 
-  const champions = links
-    .map((l) => ({ name: l.name, audioPageUrl: l.fullUrl }))
+  const champions = cat.candidates
+    .map((c) => {
+      const key = wikiChampionKeyFromAudioPageUrl(c.url);
+      const name = key ? key.replace(/_/g, " ") : c.label.replace(/\/LoL\/Audio$/i, "").replace(/_/g, " ");
+      return { name, audioPageUrl: c.url };
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   logBundle("champion_list_ready", { count: champions.length });
@@ -289,52 +259,33 @@ export async function getChampionInteractionsBundle(
   sourceCategory: string;
   audioPageUrl: string;
   interactions: FandomInteractionMinimal[];
-  interactionCount: number;
-  spokenByChampion: WrittenInteractionPayload[];
-  spokenToChampion: WrittenInteractionPayload[];
-  allInteractions: WrittenInteractionPayload[];
-  count: {
-    spokenByChampion: number;
-    spokenToChampion: number;
-    spokenByFirstEncounter: number;
-    total: number;
-  };
-  extractionNote: string;
+  count: number;
   error?: string;
 }> {
+  const isDev = process.env.NODE_ENV === "development";
   const raw = decodeURIComponent(championParam.trim());
   const championKey = toWikiChampionKey(raw.replace(/_/g, " "));
   const display = championKey.replace(/_/g, " ");
-  const primaryTitle = championKeyToLoLAudioPageTitle(championKey);
 
   if (options.refresh) {
     invalidateFandomInteractionCaches();
   }
 
-  const catRes = await fetchFandomPage(LOL_WIKI_AUDIO_CATEGORY_URL);
-  logBundle("category_fetch", { ok: catRes.ok, status: catRes.status, htmlLen: catRes.html.length });
+  logBundle("selected_champion", { raw, display, slug: championKey });
 
-  let links =
-    catRes.ok && catRes.html.length > 500 ? extractLinksFromCategoryPage(catRes.html) : [];
-
-  if (links.length < 8) {
-    logBundle("category_links_fallback_api", { priorCount: links.length });
-    const titles = await extractChampionAudioPageLinksFromCategory();
-    links = titles.map((t) => {
-      const wikiKey = t.replace(/\/LoL\/Audio$/i, "");
-      return {
-        name: wikiKey.replace(/_/g, " "),
-        fullUrl: wikiFandomArticleUrl(t),
-        wikiKey,
-      };
-    });
+  const cat = await fetchAndExtractChampionAudioLinks();
+  logBundle("category_fetch", {
+    ok: cat.ok,
+    status: cat.status,
+    htmlLen: cat.htmlLength,
+    candidateCount: cat.candidates.length,
+  });
+  if (isDev) {
+    console.info(`${BUNDLE_LOG} first_10_candidate_links`, cat.candidates.slice(0, 10));
   }
 
-  logBundle("links_ready", { count: links.length, selectedChampion: display });
-
-  const match = findChampionAudioUrl(raw, links);
-  if (!match) {
-    logBundle("champion_url_not_matched", { selectedChampion: display, slug: championKey });
+  const candidates = cat.candidates;
+  if (!candidates.length) {
     return {
       selectedChampion: display,
       slug: championKey,
@@ -342,34 +293,69 @@ export async function getChampionInteractionsBundle(
       sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
       audioPageUrl: "",
       interactions: [],
-      interactionCount: 0,
-      spokenByChampion: [],
-      spokenToChampion: [],
-      allInteractions: [],
-      count: {
-        spokenByChampion: 0,
-        spokenToChampion: 0,
-        spokenByFirstEncounter: 0,
-        total: 0,
-      },
-      extractionNote:
-        "The category page was fetched and parsed for /wiki/*/LoL/Audio links; no link matched this champion name after normalization.",
-      error: "No champion audio page link matched this champion on the Fandom category page.",
+      count: 0,
+      error: "No champion audio links could be extracted from the Fandom category page.",
     };
   }
 
-  const resolvedUrl = match.fullUrl;
-  const resolvedTitle = `${match.wikiKey}/LoL/Audio`;
-  const championAudioPageFound = true;
+  const useOpenAi = openAiFandomInteractionAgentEnabled();
+  let resolvedUrl = "";
+  let linkMatchError = "";
 
-  logBundle("matched_audio_url", { audioPageUrl: resolvedUrl, wikiKey: match.wikiKey });
+  if (useOpenAi) {
+    const aiLink = await findChampionAudioPageWithOpenAI(display, candidates);
+    if (isDev) {
+      console.info(`${BUNDLE_LOG} openai_link_match_result`, aiLink);
+    }
+    if (aiLink.found && aiLink.audioPageUrl) {
+      resolvedUrl = aiLink.audioPageUrl;
+      logBundle("openai_matched_audio_url", { audioPageUrl: resolvedUrl, confidence: aiLink.confidence });
+    } else {
+      linkMatchError = aiLink.error || "OpenAI could not match the selected champion to any extracted Fandom audio page link.";
+      logBundle("openai_link_match_failed", { error: linkMatchError });
+    }
+  }
+
+  if (!resolvedUrl) {
+    const det = findChampionAudioUrl(raw, candidatesToChampionLinks(candidates));
+    if (det) {
+      resolvedUrl = det.fullUrl;
+      logBundle("deterministic_fallback_match", { audioPageUrl: resolvedUrl });
+    }
+  }
+
+  if (!resolvedUrl) {
+    return {
+      selectedChampion: display,
+      slug: championKey,
+      championAudioPageFound: false,
+      sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+      audioPageUrl: "",
+      interactions: [],
+      count: 0,
+      error:
+        useOpenAi ?
+          "OpenAI could not match the selected champion to any extracted Fandom audio page link."
+        : linkMatchError ||
+          "No champion audio page link matched this champion on the Fandom category page.",
+    };
+  }
+
+  const keyFromUrl = wikiChampionKeyFromAudioPageUrl(resolvedUrl);
+  const resolvedTitle = keyFromUrl ? `${keyFromUrl}/LoL/Audio` : championKeyToLoLAudioPageTitle(championKey);
 
   const pageRes = await fetchChampionAudioPage(resolvedUrl);
-  logBundle("champion_page_fetch", { ok: pageRes.ok, status: pageRes.status, htmlLen: pageRes.html.length });
+  if (isDev) {
+    console.info(`${BUNDLE_LOG} champion_page_fetch_status`, {
+      ok: pageRes.ok,
+      status: pageRes.status,
+      htmlLength: pageRes.html.length,
+    });
+  }
 
   let pageText = "";
   if (pageRes.ok && pageRes.html.length > 0) {
-    pageText = extractVisibleTextFromHtml(pageRes.html);
+    pageText = extractVisibleTextFromChampionAudioPage(pageRes.html);
     logExtractedTextDebug(pageText, "browser_html");
   }
 
@@ -377,7 +363,7 @@ export async function getChampionInteractionsBundle(
     logBundle("visible_text_fallback_parse_api", { priorLen: pageText.length });
     const parseHtml = await fetchFandomParsedHtml(resolvedTitle);
     if (parseHtml) {
-      const fromParse = extractVisibleTextFromHtml(parseHtml);
+      const fromParse = extractVisibleTextFromChampionAudioPage(parseHtml);
       const fromPlain = fandomHtmlToSearchPlainText(parseHtml);
       const best = [pageText, fromParse, fromPlain].reduce((a, b) => (b.length > a.length ? b : a), "");
       if (best.length > pageText.length) {
@@ -388,59 +374,43 @@ export async function getChampionInteractionsBundle(
   }
 
   logBundle("page_text_ready", { length: pageText.length });
-
-  const useAgent = openAiFandomInteractionAgentEnabled();
-  let openAiSpokenBy: WrittenInteractionPayload[] = [];
-
-  if (useAgent && pageText.length > 200) {
-    const rawRows = await extractWrittenInteractionsWithOpenAiIfConfigured(display, pageText, resolvedUrl);
-    logBundle("openai_extract_rows", { count: rawRows.length });
-    openAiSpokenBy = rawRows.map((r) => rawOpenAiToPayload(r, resolvedUrl, resolvedTitle));
-  } else if (useAgent) {
-    logBundle("openai_extract_skipped", { reason: "page_text_too_short", length: pageText.length });
+  if (isDev && pageText.length > 0) {
+    console.info(`${BUNDLE_LOG} visible_text_preview_1000`, pageText.slice(0, 1000));
   }
 
-  const allTitles = links.map((l) => `${l.wikiKey}/LoL/Audio`);
+  let openAiRows: RawWrittenInteractionFromPage[] = [];
+  if (useOpenAi && pageText.length > 200) {
+    openAiRows = await extractWrittenInteractionsWithOpenAI(display, resolvedUrl, pageText);
+    logBundle("openai_interaction_extract_count", { count: openAiRows.length });
+  } else if (useOpenAi) {
+    logBundle("openai_interaction_extract_skipped", { reason: "page_text_too_short", length: pageText.length });
+  }
 
   await parseAndCacheLoLAudioPage(resolvedTitle, !!options.refresh);
-
-  const primaryRows = pageCache.get(resolvedTitle)?.rows ?? [];
-  const relatedTitles: string[] = [];
-  for (const r of primaryRows) {
-    if (normk(r.speaker) === normk(display)) {
-      const t = championKeyToLoLAudioPageTitle(toWikiChampionKey(r.target));
-      if (t.toLowerCase() !== resolvedTitle.toLowerCase()) {
-        relatedTitles.push(t);
-      }
-    }
-  }
-  const uniqueRelated = [...new Set(relatedTitles)].slice(0, 16);
-  if (uniqueRelated.length) {
-    const batch = await fetchWikitextBatch(uniqueRelated);
-    for (const t of uniqueRelated) {
-      if (batch.get(t)) {
-        await parseAndCacheLoLAudioPage(t);
-      }
-    }
-  }
-
-  await probePagesMentioningChampion(championKey, display, resolvedTitle, allTitles);
-
   const refreshedPrimary = pageCache.get(resolvedTitle)?.rows ?? [];
   const spokenByDeterministic = refreshedPrimary.filter((r) => normk(r.speaker) === normk(display)).map(toApiRow);
-  const spokenBy = mergeWrittenPayloadRows(openAiSpokenBy, spokenByDeterministic);
-  const spokenTo = (globalByTarget.get(normk(display)) ?? []).map(toApiRow);
 
-  const merged = new Map<string, WrittenInteractionPayload>();
-  for (const x of [...spokenBy, ...spokenTo]) {
-    merged.set(`${normk(x.speaker)}|${normk(x.target)}|${x.quote}`, x);
+  const openAiPayloads = openAiRows.map((r) => rawOpenAiToPayload(r, resolvedUrl, resolvedTitle));
+  const spokenBy = mergeWrittenPayloadRows(openAiPayloads, spokenByDeterministic);
+  const interactions = toMinimalFromPayload(spokenBy);
+  const count = interactions.length;
+
+  logBundle("final_interaction_count", { count });
+
+  const championAudioPageFound = true;
+
+  if (count === 0) {
+    return {
+      selectedChampion: display,
+      slug: championKey,
+      championAudioPageFound,
+      sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
+      audioPageUrl: resolvedUrl,
+      interactions: [],
+      count: 0,
+      error: "No written champion-to-champion interactions were found in the provided page text.",
+    };
   }
-  const all = [...merged.values()].sort((a, b) => b.quote.length - a.quote.length);
-  const total = all.length;
-  const firstEnc = spokenBy.filter((x) => x.interactionType === "First Encounter");
-
-  const interactions = toMinimalInteractions(spokenBy);
-  const interactionCount = interactions.length;
 
   return {
     selectedChampion: display,
@@ -449,28 +419,7 @@ export async function getChampionInteractionsBundle(
     sourceCategory: LOL_WIKI_AUDIO_CATEGORY_URL,
     audioPageUrl: resolvedUrl,
     interactions,
-    interactionCount,
-    spokenByChampion: spokenBy,
-    spokenToChampion: spokenTo,
-    allInteractions: all,
-    count: {
-      spokenByChampion: spokenBy.length,
-      spokenToChampion: spokenTo.length,
-      spokenByFirstEncounter: firstEnc.length,
-      total,
-    },
-    extractionNote:
-      useAgent ?
-        "URLs come from fetched category HTML (Cheerio) with API fallback; the champion page is fetched server-side, visible text is extracted, then OpenAI structures interactions only from that text (quotes validated against the text). HTML+wikitext parsing is merged as fallback. No model-driven browsing."
-      : "Written lines are parsed from Fandom rendered HTML (Cheerio on MediaWiki action=parse) and merged with wikitext for coverage. Audio elements are ignored. No .ogg playback or transcription.",
-    ...(total === 0 ?
-      {
-        error:
-          useAgent && championAudioPageFound && pageText.length > 400 ?
-            "No written champion-to-champion interactions found in the provided page text."
-          : "No verified written champion interactions found on the Fandom audio pages.",
-      }
-    : {}),
+    count,
   };
 }
 

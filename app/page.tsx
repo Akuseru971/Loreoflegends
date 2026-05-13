@@ -17,6 +17,13 @@ function wikiPageTitleFromAudioPageUrl(url: string): string {
   }
 }
 
+const EXPLORER_LOADING_STAGES = [
+  "Loading champion audio index…",
+  "Finding the correct champion page…",
+  "Fetching champion audio page…",
+  "Extracting written interactions…",
+] as const;
+
 const loreContentTypeOptions = ["Voice Line", "Champion Relationship", "Dialogue Subtext", "Conflict Explanation"] as const;
 const tones = ["Mysterious", "Cinematic", "Serious", "Dark", "Tragic", "Analytical"] as const;
 const platforms = ["TikTok", "YouTube Shorts", "Instagram Reels", "Podcast Short"] as const;
@@ -266,7 +273,7 @@ export default function HomePage() {
   const [editableScript, setEditableScript] = useState("");
 
   type ExplorerChampion = { name: string; audioPageUrl: string };
-  type ExplorerWrittenInteraction = {
+  type ExplorerApiInteraction = {
     speaker: string;
     target: string;
     quote: string;
@@ -277,31 +284,15 @@ export default function HomePage() {
     sourceType: string;
     isSkinContext: boolean;
   };
+  type ExplorerWrittenInteraction = ExplorerApiInteraction;
   type ExplorerInteractionsResponse = {
     selectedChampion: string;
     slug: string;
     championAudioPageFound?: boolean;
     sourceCategory?: string;
     audioPageUrl: string;
-    interactions?: {
-      speaker: string;
-      target: string;
-      quote: string;
-      interactionType: string;
-      section: string;
-      sourceUrl: string;
-    }[];
-    interactionCount?: number;
-    spokenByChampion: ExplorerWrittenInteraction[];
-    spokenToChampion: ExplorerWrittenInteraction[];
-    allInteractions: ExplorerWrittenInteraction[];
-    count: {
-      spokenByChampion: number;
-      spokenToChampion: number;
-      spokenByFirstEncounter?: number;
-      total: number;
-    };
-    extractionNote?: string;
+    interactions: ExplorerApiInteraction[];
+    count: number;
     error?: string;
   };
 
@@ -314,7 +305,7 @@ export default function HomePage() {
   const [explorerInteractions, setExplorerInteractions] = useState<ExplorerInteractionsResponse | null>(null);
   const [explorerInteractionsLoading, setExplorerInteractionsLoading] = useState(false);
   const [explorerInteractionsError, setExplorerInteractionsError] = useState("");
-  const [explorerTab, setExplorerTab] = useState<"by" | "to" | "all">("by");
+  const [explorerLoadingTick, setExplorerLoadingTick] = useState(0);
   const [explorerFilterTarget, setExplorerFilterTarget] = useState("");
   const [explorerFilterType, setExplorerFilterType] = useState("");
   const [explorerFilterQuote, setExplorerFilterQuote] = useState("");
@@ -363,6 +354,16 @@ export default function HomePage() {
   }, [rawAudioUrl, cleanedGeneratedAudioUrl]);
 
   useEffect(() => {
+    if (!explorerInteractionsLoading) {
+      return;
+    }
+    const id = window.setInterval(() => {
+      setExplorerLoadingTick((t) => (t + 1) % EXPLORER_LOADING_STAGES.length);
+    }, 800);
+    return () => window.clearInterval(id);
+  }, [explorerInteractionsLoading]);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       setExplorerChampionsLoading(true);
@@ -406,6 +407,7 @@ export default function HomePage() {
     let cancelled = false;
     (async () => {
       setExplorerInteractionsLoading(true);
+      setExplorerLoadingTick(0);
       setExplorerInteractionsError("");
       try {
         const enc = encodeURIComponent(selectedExplorerSlug);
@@ -452,12 +454,7 @@ export default function HomePage() {
     if (!explorerInteractions) {
       return [];
     }
-    const rows =
-      explorerTab === "by"
-        ? explorerInteractions.spokenByChampion
-        : explorerTab === "to"
-          ? explorerInteractions.spokenToChampion
-          : explorerInteractions.allInteractions;
+    const rows = Array.isArray(explorerInteractions.interactions) ? explorerInteractions.interactions : [];
     const ft = explorerFilterTarget.trim().toLowerCase();
     const fty = explorerFilterType.trim().toLowerCase();
     const fq = explorerFilterQuote.trim().toLowerCase();
@@ -473,13 +470,14 @@ export default function HomePage() {
       }
       return true;
     });
-  }, [explorerInteractions, explorerTab, explorerFilterTarget, explorerFilterType, explorerFilterQuote]);
+  }, [explorerInteractions, explorerFilterTarget, explorerFilterType, explorerFilterQuote]);
 
   async function refreshExplorerInteractions() {
     if (!selectedExplorerSlug) {
       return;
     }
     setExplorerInteractionsLoading(true);
+    setExplorerLoadingTick(0);
     setExplorerInteractionsError("");
     try {
       const enc = encodeURIComponent(selectedExplorerSlug);
@@ -1103,7 +1101,10 @@ export default function HomePage() {
                     ) : (
                       "LoL champion audio category"
                     )}
-                    . The server parses written wiki text only — no .ogg / .mp3 / .wav download or transcription.
+                    . The server fetches the category HTML, extracts real audio links, uses OpenAI only to pick the
+                    correct link for the selected name (from that list), then fetches the champion page and extracts
+                    written lines (OpenAI structures interactions from the provided page text; quotes are
+                    validated). No .ogg download or transcription.
                   </p>
                 </div>
                 {explorerChampionsLoading ? (
@@ -1139,7 +1140,6 @@ export default function HomePage() {
                       if (!next) {
                         setExplorerInteractions(null);
                       }
-                      setExplorerTab("by");
                       setExplorerFilterTarget("");
                       setExplorerFilterType("");
                       setExplorerFilterQuote("");
@@ -1191,7 +1191,9 @@ export default function HomePage() {
                   </div>
 
                   {explorerInteractionsLoading ? (
-                    <p className="text-sm text-slate-400">Loading written interactions from Fandom…</p>
+                    <p className="text-sm text-slate-400">
+                      {EXPLORER_LOADING_STAGES[explorerLoadingTick % EXPLORER_LOADING_STAGES.length]}
+                    </p>
                   ) : null}
                   {explorerInteractionsError ? (
                     <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
@@ -1208,65 +1210,10 @@ export default function HomePage() {
                     <>
                       <p className="text-sm text-slate-300">
                         <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> —{" "}
-                        <span className="text-cyan-200">{explorerInteractions.count.spokenByChampion}</span> lines spoken by
-                        them on their Fandom audio page
-                        {typeof explorerInteractions.count.spokenByFirstEncounter === "number" ? (
-                          <>
-                            {" "}
-                            (<span className="text-cyan-100">{explorerInteractions.count.spokenByFirstEncounter}</span> tagged
-                            &ldquo;First Encounter&rdquo;)
-                          </>
-                        ) : null}
-                        . <span className="text-cyan-200">{explorerInteractions.count.spokenToChampion}</span> lines where they
-                        are the target (from other champions&rsquo; pages).{" "}
-                        <span className="text-white">{explorerInteractions.count.total}</span> unique cards in &ldquo;All&rdquo;.
+                        <span className="text-cyan-200">{explorerInteractions.count}</span> written champion interaction
+                        {explorerInteractions.count === 1 ? "" : "s"} from their Fandom audio page (category index → matched
+                        link → page text → structured lines).
                       </p>
-                      {explorerInteractions.extractionNote ? (
-                        <p className="text-xs text-slate-500">{explorerInteractions.extractionNote}</p>
-                      ) : null}
-
-                      <div className="flex flex-wrap gap-2">
-                        {(() => {
-                          const nm = explorerInteractions.selectedChampion;
-                          return (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => setExplorerTab("by")}
-                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                                  explorerTab === "by"
-                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
-                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
-                                }`}
-                              >
-                                Spoken by {nm}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setExplorerTab("to")}
-                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                                  explorerTab === "to"
-                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
-                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
-                                }`}
-                              >
-                                Spoken to {nm}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setExplorerTab("all")}
-                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
-                                  explorerTab === "all"
-                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
-                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
-                                }`}
-                              >
-                                All interactions
-                              </button>
-                            </>
-                          );
-                        })()}
-                      </div>
 
                       <div className="grid gap-3 sm:grid-cols-3">
                         <label className="block text-sm">
