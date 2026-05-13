@@ -481,6 +481,17 @@ function rowMatchesPair(row: WikiVoiceInteraction, a: string, b: string): boolea
   return (sp === ak && tg === bk) || (sp === bk && tg === ak);
 }
 
+/** True if raw wikitext references this champion in a {{ci|…}} template (common reverse-line signal). */
+function wikitextReferencesChampionCi(wikitext: string, primaryKey: string, primaryName: string): boolean {
+  const variants = [
+    `{{ci|${primaryKey}}`,
+    `{{ci|${primaryName}}`,
+    `{{ci|${primaryKey.replace(/_/g, " ")}}`,
+  ];
+  const low = wikitext.toLowerCase();
+  return variants.some((v) => low.includes(v.toLowerCase()));
+}
+
 export type FindVoiceLineOptions = {
   /** Primary champion display name (e.g. "Jinx", "jarvan iv"). */
   primaryDisplay: string;
@@ -554,6 +565,40 @@ export async function findChampionVoiceLineInteraction(opts: FindVoiceLineOption
   }
 
   merged = dedupeInteractions(merged);
+
+  if (!secondaryName && allTitles.length > 0) {
+    const primaryHits = merged.filter((r) => rowInvolvesChampion(r, primaryName));
+    if (primaryHits.length < 12) {
+      const sorted = [...allTitles].sort((a, b) => a.localeCompare(b));
+      let h = 0;
+      for (let i = 0; i < primaryName.length; i++) {
+        h = (h + primaryName.charCodeAt(i) * (i + 1)) % 997;
+      }
+      const offset = sorted.length ? h % sorted.length : 0;
+      const skip = new Set<string>([primaryTitle.toLowerCase(), ...relatedList.map((x) => x.toLowerCase())]);
+      const probe: string[] = [];
+      for (let i = 0; i < sorted.length && probe.length < 20; i++) {
+        const t = sorted[(offset + i) % sorted.length]!;
+        const tl = t.toLowerCase();
+        if (!skip.has(tl)) {
+          skip.add(tl);
+          probe.push(t);
+        }
+      }
+      const probeTexts = probe.length ? await fetchWikitextBatch(probe) : new Map<string, string | null>();
+      for (const t of probe) {
+        const wt = probeTexts.get(t);
+        if (!wt) {
+          continue;
+        }
+        if (!wikitextReferencesChampionCi(wt, primaryKey, primaryName)) {
+          continue;
+        }
+        merged.push(...parseWikiVoiceInteractions(wt, t));
+      }
+      merged = dedupeInteractions(merged);
+    }
+  }
 
   let pool = merged.filter((r) => rowInvolvesChampion(r, primaryName));
   if (secondaryName) {
