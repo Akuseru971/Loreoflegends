@@ -1,7 +1,7 @@
 {
-  "name": "audio-pace-cleaner",
+  "name": "lol-interaction-explainer",
   "version": "1.0.0",
-  "description": "Vercel-ready SaaS for shortening long pauses in creator audio.",
+  "description": "League of Legends interaction explainer: canon voice lines, relationships, and TikTok-ready scripts, plus optional ElevenLabs audio and pace cleaning.",
   "private": true,
   "scripts": {
     "dev": "next dev",

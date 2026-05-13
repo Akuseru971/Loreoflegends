@@ -85,6 +85,15 @@ type LorePack = {
   youtubeShortsTitle: string;
   hashtags: string[];
   pinnedComment: string;
+  /** Internal pre-publish checklist; must not invent verification—be honest when uncertain. */
+  accuracySelfCheck: {
+    quoteReal: string;
+    speakerVerified: string;
+    targetVerified: string;
+    sourceOrigin: string;
+    canonOnlyBasis: string;
+    unsupportedAssumptions: string;
+  };
 };
 
 function jsonError(message: string, status = 400) {
@@ -121,6 +130,17 @@ function validateLorePack(value: unknown): LorePack | null {
   const retentionBreakdown = pack.retentionBreakdown;
   const loreAccuracyNotes = pack.loreAccuracyNotes;
 
+  const selfCheck = pack.accuracySelfCheck;
+  const validSelfCheck =
+    selfCheck &&
+    typeof selfCheck === "object" &&
+    typeof (selfCheck as Record<string, unknown>).quoteReal === "string" &&
+    typeof (selfCheck as Record<string, unknown>).speakerVerified === "string" &&
+    typeof (selfCheck as Record<string, unknown>).targetVerified === "string" &&
+    typeof (selfCheck as Record<string, unknown>).sourceOrigin === "string" &&
+    typeof (selfCheck as Record<string, unknown>).canonOnlyBasis === "string" &&
+    typeof (selfCheck as Record<string, unknown>).unsupportedAssumptions === "string";
+
   if (
     typeof pack.title !== "string" ||
     typeof pack.hook !== "string" ||
@@ -147,7 +167,8 @@ function validateLorePack(value: unknown): LorePack | null {
     typeof pack.instagramCaption !== "string" ||
     typeof pack.youtubeShortsTitle !== "string" ||
     !isStringArray(pack.hashtags) ||
-    typeof pack.pinnedComment !== "string"
+    typeof pack.pinnedComment !== "string" ||
+    !validSelfCheck
   ) {
     return null;
   }
@@ -328,7 +349,15 @@ JSON schema:
   "instagramCaption": string,
   "youtubeShortsTitle": string,
   "hashtags": string[],
-  "pinnedComment": string
+  "pinnedComment": string,
+  "accuracySelfCheck": {
+    "quoteReal": string,
+    "speakerVerified": string,
+    "targetVerified": string,
+    "sourceOrigin": string,
+    "canonOnlyBasis": string,
+    "unsupportedAssumptions": string
+  }
 }
 
 Inputs:
@@ -346,86 +375,80 @@ Inputs:
 - Audience level: ${audienceLevel}
 - Creator goal: ${creatorGoal}
 
-ANGLE AND AUDIENCE DIRECTION:
-- Narrative angle controls what the script should prioritize:
-  Core tragedy = emotional wound and consequence.
-  Cause and consequence = clear chain of events.
-  Character motivation = why a character acts the way they do.
-  Region politics = factions, power, conflict, and stakes.
-  Beginner explainer = maximum clarity for new viewers.
-  Mythic horror = cosmic dread through confirmed facts only.
-  Moral ambiguity = why the topic is hard to judge.
-- Audience level controls assumed knowledge:
-  New to lore = explain every proper noun quickly.
-  Casual player = connect lore to champions/regions viewers may recognize.
-  Lore fan = allow more specificity, but still keep it clear.
-- Creator goal controls optimization:
-  Teach clearly = prioritize explanation.
-  Maximize retention = prioritize hooks, reversals, and escalating reveals.
-  Prepare voiceover = prioritize clean spoken rhythm.
-  Spark comments = prioritize a nuanced final question and debate angle.
+NARRATIVE ANGLE (use "${narrativeAngle}" as the main lens):
+- Relationship: bonds, trust, betrayal, and what ties these champions.
+- Conflict: opposing goals, violence, political or personal clash.
+- Trauma: wounds, loss, guilt—only when supported by official material.
+- Ideology: beliefs, orders, creeds—tied to confirmed lore.
+- Family tie: lineage and kinship only when officially established.
+- Rivalry: sustained opposition supported by canon.
+- Hidden subtext: reading between the lines only when you clearly label speculation vs confirmation.
+
+AUDIENCE AND CREATOR GOALS:
+- New to lore: define proper nouns and stakes in simple terms.
+- Casual player: anchor to recognizable champions, regions, and game moments.
+- Lore fan: allow sharper detail; never smuggle fan theory as fact.
+- Teach clearly: clarity first.
+- Maximize retention: hooks and payoffs without fake drama.
+- Prepare voiceover: short sentences, speakable names, clean rhythm.
+- Spark comments: one nuanced question; no rage-bait.
 
 CORE GOAL:
-Explain interactions between League of Legends champions: exact voice lines, who says them, who they target, what the line reveals, and the canon lore behind the sentence. The viewer should finish thinking: "I understand this champion interaction better now."
+Explain champion-to-champion interactions: voice lines, who speaks, who is addressed when known, in-game vs skin vs event context, and the official lore behind the line. The viewer should think: I understand this interaction better, and I know what is confirmed vs not.
 
 CRITICAL ATTRIBUTION RULE:
 - Never attribute a quote to the wrong champion.
-- Never invent a reply or turn a single quote into a fake dialogue.
-- Never create an interaction that is not confirmed.
-- If the exact quote, speaker, or target cannot be verified from official Riot material, set canonStatus to "UNCONFIRMED" or "RISKY" and clearly state: "I cannot confirm this interaction as canon without an official source."
-- If the line comes from a skin, event, Legends of Runeterra, Wild Rift, or old/legacy version, state that in sourceType and importantCanonLimit.
+- Never invent a reply; never turn one line into a fake two-way dialogue.
+- Never fabricate an interaction that does not exist in official sources.
+- If quote, speaker, or target cannot be verified from official Riot sources, set canonStatus to "UNCONFIRMED" or "RISKY" and include verbatim: "I cannot confirm this interaction as canon without an official source." in importantCanonLimit or canonContext as appropriate.
+- If the line is from a skin, alternate canon (Legends of Runeterra / Wild Rift), cinematic, narrative event, or legacy version, say so explicitly in interaction.sourceType and importantCanonLimit.
+
+MANDATORY DISCLAIMER WHEN NOT OFFICIALLY CONFIRMED:
+- Whenever you state or imply that something is not officially confirmed, you MUST also include the exact sentence (in the same language as the rest of the written fields canonContext / importantCanonLimit / whatItReveals where the caveat appears):
+  - English: This is not officially confirmed in canon.
+  - French: Ceci n'est pas confirmé officiellement dans le canon.
+  - Spanish: Esto no está confirmado oficialmente en el canon.
+- Use plain language elsewhere to separate: confirmed fact vs reasonable implication vs unknown.
 
 SCRIPT STYLE:
-- Sound like a high-retention TikTok / Shorts lore creator explaining real League of Legends canon.
-- Do not sound like Wikipedia.
-- Do not sound like generic fantasy storytelling.
-- Use short, punchy spoken sentences with natural ElevenLabs rhythm.
-- Be social-media native: strong first 3 seconds, no dead time, no academic phrasing.
-- Be dramatic only through confirmed facts, consequences, motivations, and reversals.
-- Adapt depth for audience level:
-  - New to lore: explain terms and stakes simply.
-  - Casual player: connect lore to recognizable champions, regions, and conflicts.
-  - Lore fan: include sharper cause/effect and less obvious implications.
-- Prioritize the creator goal:
-  - Teach clearly: maximize clarity and concrete facts.
-  - Maximize retention: sharpen hook, reversals, and payoff.
-  - Prepare voiceover: simplify sentence rhythm and pronunciation.
-  - Spark comments: make the final question more debatable without rage-bait.
+- Tone: ${tone} — mysterious, cinematic, serious, TikTok-native, simple for a general audience, precise for lore fans.
+- Sound like a high-retention Shorts lore creator, not Wikipedia.
+- Short punchy sentences, ElevenLabs-friendly rhythm, no academic tone.
+- Strong first 3 seconds; curiosity every ~10-12 seconds.
+- Drama only from confirmed facts; no invented emotional reactions or conclusions.
 
 CANON ACCURACY RULES:
-- Use only confirmed official League of Legends / Runeterra lore.
-- Valid source types are Riot Universe bios, official short stories, official in-game voice lines, official narrative events, Riot cinematics, official champion pages, Legends of Runeterra, or Wild Rift when clearly labeled.
-- Do not invent new lore, relationships, motivations, factions, powers, locations, or timelines.
-- Do not add headcanon.
-- Do not exaggerate beyond what is confirmed.
-- Do not create fake connections between champions.
-- Do not rely on fan theories.
-- Do not transform unclear lore into certainty.
-- If a detail is uncertain or interpretive, phrase it carefully and naturally.
-- Avoid repeated phrases like "according to official lore" or "according to Riot".
-- The output must sound natural, cinematic, and human, not like a disclaimer.
+- Canon only: Riot Universe bios, official short stories, official League voice lines, official narrative events, Riot cinematics, official champion pages; LoR/WR only when labeled as such.
+- Never invent relationships, intentions, dialogue, emotional reactions, non-canon chronology, or conclusions.
+- You may explain what a line suggests only if you clearly separate confirmed vs implicit vs not confirmed.
+- Do not blend old removed lore, fan theory, and current canon—call out legacy explicitly when relevant.
+- Avoid repetitive filler like "according to Riot" every sentence; stay human and cinematic.
 
-OUTPUT FORMAT REQUIREMENTS:
-- title: viral title explaining the core interaction.
-- hook: short TikTok-style hook.
-- interaction.speaker: champion who says the quote, or "Unconfirmed" if not verifiable.
-- interaction.quote: exact quote if confirmed. If not confirmed, do not fabricate; write "I cannot confirm this exact quote as canon without an official source."
-- interaction.target: target champion if confirmed, otherwise "Unconfirmed / not target-specific".
-- interaction.sourceType: base champion voice line, skin voice line, Legends of Runeterra, Wild Rift, cinematic, Riot Universe story, old/legacy lore, or unconfirmed.
-- canonContext: official lore behind the line using only confirmed canon.
-- whatItReveals: what the line reveals about relationship, conflict, trauma, ideology, rivalry, family, or old alliance.
-- importantCanonLimit: what is not confirmed and what should not be over-interpreted.
-- tiktokScript: 45-60 second script, short and punchy, 100% canon-safe.
-- script and voiceReadyScript must equal the final tiktokScript for ElevenLabs compatibility.
+OUTPUT FIELD REQUIREMENTS:
+- title: strong viral title for the core interaction.
+- hook: one short TikTok-style hook (mysterious/shocking but accurate).
+- interaction.speaker: speaking champion, or honest unconfirmed wording.
+- interaction.quote: EXACT in-game or official line if you are confident it is real. If not verifiable, do not invent text; use: I cannot confirm this exact quote as canon without an official source.
+- interaction.target: addressee if confirmed; otherwise Unconfirmed / not target-specific or similar honest wording.
+- interaction.sourceType: label precisely (base in-game interaction, skin, LoR, Wild Rift, cinematic, Riot Universe story, legacy/old VO, unknown).
+- canonContext: only confirmed official lore behind the line.
+- whatItReveals: relationship, conflict, trauma, ideology, rivalry, family, alliances—tie each claim to confirmed vs implicit vs not confirmed.
+- importantCanonLimit: what must not be over-interpreted; any misread risk; legacy/skin caveats.
+- tiktokScript: single continuous 45-60 second narration, same language as requested, 100% canon-safe, no fake facts.
+- script and voiceReadyScript must match tiktokScript (voice-ready punctuation).
+
+accuracySelfCheck (answer honestly—do not fake certainty):
+- quoteReal: Is the quote real and exact, or marked unverified?
+- speakerVerified: Who says it, and confidence level.
+- targetVerified: Target if any, and confidence level.
+- sourceOrigin: Base VO / skin / LoR / WR / cinematic / story / legacy / unknown.
+- canonOnlyBasis: Which official source categories you relied on (general, no fake URLs).
+- unsupportedAssumptions: List any assumptions you refused to state as fact, or "None" if truly none.
 
 CONTENT DEPTH RULES:
-- Include clear context.
-- Include at least 3 confirmed lore facts.
-- Explain the exact lore behind each important phrase.
-- Distinguish confirmed, implied, and unconfirmed.
-- Make the viewer understand something precise by the end.
-- Use the narrative angle "${narrativeAngle}" as the main lens.
-- If the interaction cannot be verified, do not pretend. Explain that it cannot be confirmed, then provide a safer canon-grounded explanation only if possible.
+- At least 3 confirmed lore facts in loreAccuracyNotes that actually appear in the script.
+- Explain important phrases with confirmed backing.
+- If the interaction cannot be verified, do not pretend—state the unavailability message, then only add safe, clearly labeled general canon if helpful.
 
 SOCIAL MEDIA REQUIREMENTS:
 - No boring intro such as "Today we are going to talk about".
@@ -488,7 +511,7 @@ async function generatePack(openai: OpenAI, prompt: string) {
       {
         role: "system",
         content:
-          "You are a senior League of Legends lore writer and short-form retention editor. You are strict about Riot canon and never fabricate lore.",
+          "You are a senior League of Legends lore writer and short-form retention editor. You never invent quotes, dialogue, or relationships. You separate confirmed canon from implication and unknowns. When something is not officially confirmed, you include the exact required disclaimer sentence for the output language in written analysis fields.",
       },
       { role: "user", content: prompt },
     ],
@@ -548,7 +571,15 @@ JSON schema:
   "instagramCaption": string,
   "youtubeShortsTitle": string,
   "hashtags": string[],
-  "pinnedComment": string
+  "pinnedComment": string,
+  "accuracySelfCheck": {
+    "quoteReal": string,
+    "speakerVerified": string,
+    "targetVerified": string,
+    "sourceOrigin": string,
+    "canonOnlyBasis": string,
+    "unsupportedAssumptions": string
+  }
 }
 
 Context:
@@ -573,6 +604,12 @@ Strict canon rules:
 - The final script returned in "tiktokScript", "script", and "voiceReadyScript" must be the clean, final, lore-accurate version.
 - The user should not need a separate accuracy scanner. This response is the final publish-ready pack.
 
+- If anything is not officially confirmed, the written fields (not the narration script) must include the exact mandatory sentence for the output language:
+  English: This is not officially confirmed in canon.
+  French: Ceci n'est pas confirmé officiellement dans le canon.
+  Spanish: Esto no está confirmado oficialmente en el canon.
+- Update accuracySelfCheck to honestly reflect the corrected pack after your edits.
+
 Output requirements:
 - Keep the production pack useful for TikTok, Shorts, Reels, and podcast shorts.
 - Ensure loreAccuracyNotes contain only confirmed facts actually used in the corrected script.
@@ -589,7 +626,7 @@ async function canonCleanPack(openai: OpenAI, pack: LorePack, topic: string, con
       {
         role: "system",
         content:
-          "You are a strict League of Legends lore accuracy editor. You correct generated content to current Riot canon and never invent facts.",
+          "You are a strict League of Legends lore accuracy editor. You correct drafts to current Riot canon, never invent facts, and you refresh accuracySelfCheck to match the final pack. Mandatory disclaimer sentences for unconfirmed claims must appear in written fields when applicable.",
       },
       {
         role: "user",

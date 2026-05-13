@@ -69,6 +69,14 @@ type LorePack = {
   youtubeShortsTitle: string;
   hashtags: string[];
   pinnedComment: string;
+  accuracySelfCheck: {
+    quoteReal: string;
+    speakerVerified: string;
+    targetVerified: string;
+    sourceOrigin: string;
+    canonOnlyBasis: string;
+    unsupportedAssumptions: string;
+  };
   qualityReport?: {
     score: number;
     passed: boolean;
@@ -161,15 +169,22 @@ function downloadTextFile(fileName: string, content: string, mimeType = "text/pl
 }
 
 function scriptAsText(pack: LorePack) {
+  const { speaker, quote, target } = pack.interaction;
   return [
-    `Viral title: ${pack.title}`,
+    "Title:",
+    pack.title,
     "",
-    `Short hook: ${pack.hook}`,
+    "Hook:",
+    pack.hook,
     "",
     "Interaction:",
-    `${pack.interaction.speaker} says: "${pack.interaction.quote}"`,
-    `To: ${pack.interaction.target}`,
-    `Source: ${pack.interaction.sourceType}`,
+    `${speaker} says:`,
+    `"${quote}"`,
+    "",
+    "To:",
+    target,
+    "",
+    `Source type: ${pack.interaction.sourceType}`,
     `Canon status: ${pack.interaction.canonStatus}`,
     "",
     "Canon Context:",
@@ -181,8 +196,17 @@ function scriptAsText(pack: LorePack) {
     "Important Canon Limit:",
     pack.importantCanonLimit,
     "",
-    "Full narration script:",
+    "TikTok Script:",
     pack.tiktokScript,
+    "",
+    "---",
+    "Internal accuracy self-check (creator-facing):",
+    `Quote: ${pack.accuracySelfCheck.quoteReal}`,
+    `Speaker: ${pack.accuracySelfCheck.speakerVerified}`,
+    `Target: ${pack.accuracySelfCheck.targetVerified}`,
+    `Source origin: ${pack.accuracySelfCheck.sourceOrigin}`,
+    `Canon-only basis: ${pack.accuracySelfCheck.canonOnlyBasis}`,
+    `Unsupported assumptions avoided: ${pack.accuracySelfCheck.unsupportedAssumptions}`,
     "",
     "Voice-ready version:",
     pack.voiceReadyScript,
@@ -630,17 +654,17 @@ export default function HomePage() {
 
       <section className="mx-auto flex w-full max-w-7xl flex-col gap-10 px-5 py-8 sm:px-8 lg:py-12">
         <nav className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-lg font-black text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
-              LC
+            <div className="flex items-center gap-3">
+            <div className="grid size-11 place-items-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 text-xs font-black leading-tight text-cyan-200 shadow-[0_0_40px_rgba(34,211,238,0.22)]">
+              LoL
             </div>
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Lore to audio workflow</p>
-              <p className="font-semibold text-white">LoL Lore + Audio Pace Cleaner</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.34em] text-cyan-200/70">Canon interaction studio</p>
+              <p className="font-semibold text-white">LoL Interaction Explainer + Audio Pace Cleaner</p>
             </div>
           </div>
           <div className="rounded-full border border-white/10 bg-white/[0.04] px-4 py-2 text-sm text-slate-300 backdrop-blur">
-            Generate script. Voice it. Clean the pacing.
+            Canon-first lines. Viral scripts. Voiceover-ready pacing.
           </div>
         </nav>
 
@@ -1014,6 +1038,7 @@ export default function HomePage() {
                 </div>
 
                 <div className="grid gap-4 lg:grid-cols-2">
+                  <AccuracySelfCheckCard check={loreResult.accuracySelfCheck} />
                   <QualityReportCard report={loreResult.qualityReport} qualityNote={loreResult.qualityNote} />
                   <TextResultCard title="Viral title" value={loreResult.title} />
                   <TextResultCard title="Short hook" value={loreResult.hook} />
@@ -1576,6 +1601,55 @@ function LoreAccuracyNotesCard({ items }: { items: LorePack["loreAccuracyNotes"]
           </div>
         ))}
       </div>
+    </details>
+  );
+}
+
+function AccuracySelfCheckCard({ check }: { check: LorePack["accuracySelfCheck"] }) {
+  const value = [
+    `Quote: ${check.quoteReal}`,
+    `Speaker: ${check.speakerVerified}`,
+    `Target: ${check.targetVerified}`,
+    `Source origin: ${check.sourceOrigin}`,
+    `Canon-only basis: ${check.canonOnlyBasis}`,
+    `Unsupported assumptions: ${check.unsupportedAssumptions}`,
+  ].join("\n");
+
+  return (
+    <details open className="rounded-3xl border border-cyan-300/20 bg-cyan-950/40 p-5">
+      <summary className="flex cursor-pointer items-center justify-between gap-3 font-bold text-white">
+        <span>Internal accuracy pass</span>
+        <CopyButton value={value} />
+      </summary>
+      <p className="mt-2 text-xs leading-5 text-slate-400">
+        Model-generated checklist: quote reality, speaker, target, source bucket, canon basis, and avoided assumptions. Always cross-check against Riot sources before publishing.
+      </p>
+      <dl className="mt-4 grid gap-3 text-sm">
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Is the quote real?</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.quoteReal}</dd>
+        </div>
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Who speaks?</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.speakerVerified}</dd>
+        </div>
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Target</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.targetVerified}</dd>
+        </div>
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Source origin</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.sourceOrigin}</dd>
+        </div>
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Canon-only basis</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.canonOnlyBasis}</dd>
+        </div>
+        <div className="rounded-2xl bg-white/[0.035] p-3">
+          <dt className="font-bold text-cyan-100">Unsupported assumptions</dt>
+          <dd className="mt-1 leading-6 text-slate-300">{check.unsupportedAssumptions}</dd>
+        </div>
+      </dl>
     </details>
   );
 }
