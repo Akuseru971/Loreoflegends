@@ -254,6 +254,42 @@ export default function HomePage() {
   const [loreError, setLoreError] = useState("");
   const [isLoreGenerating, setIsLoreGenerating] = useState(false);
   const [editableScript, setEditableScript] = useState("");
+
+  type ExplorerChampion = { name: string; slug: string; audioPageUrl: string };
+  type ExplorerWrittenInteraction = {
+    speaker: string;
+    target: string;
+    quote: string;
+    interactionType: string;
+    section: string;
+    sourceUrl: string;
+    sourceType: string;
+    isSkinContext: boolean;
+  };
+  type ExplorerInteractionsResponse = {
+    selectedChampion: string;
+    slug: string;
+    audioPageUrl: string;
+    spokenByChampion: ExplorerWrittenInteraction[];
+    spokenToChampion: ExplorerWrittenInteraction[];
+    allInteractions: ExplorerWrittenInteraction[];
+    count: { spokenByChampion: number; spokenToChampion: number; total: number };
+    extractionNote?: string;
+  };
+
+  const [explorerChampions, setExplorerChampions] = useState<ExplorerChampion[]>([]);
+  const [explorerCategoryUrl, setExplorerCategoryUrl] = useState("");
+  const [explorerChampionsLoading, setExplorerChampionsLoading] = useState(true);
+  const [explorerChampionsError, setExplorerChampionsError] = useState("");
+  const [explorerChampionQuery, setExplorerChampionQuery] = useState("");
+  const [selectedExplorerSlug, setSelectedExplorerSlug] = useState("");
+  const [explorerInteractions, setExplorerInteractions] = useState<ExplorerInteractionsResponse | null>(null);
+  const [explorerInteractionsLoading, setExplorerInteractionsLoading] = useState(false);
+  const [explorerInteractionsError, setExplorerInteractionsError] = useState("");
+  const [explorerTab, setExplorerTab] = useState<"by" | "to" | "all">("by");
+  const [explorerFilterTarget, setExplorerFilterTarget] = useState("");
+  const [explorerFilterType, setExplorerFilterType] = useState("");
+  const [explorerFilterQuote, setExplorerFilterQuote] = useState("");
   const [elevenLabsApiKey, setElevenLabsApiKey] = useState("");
   const [elevenLabsVoiceId, setElevenLabsVoiceId] = useState("");
   const [elevenLabsModel, setElevenLabsModel] = useState<ElevenLabsModel>("eleven_multilingual_v2");
@@ -297,6 +333,141 @@ export default function HomePage() {
       }
     };
   }, [rawAudioUrl, cleanedGeneratedAudioUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setExplorerChampionsLoading(true);
+      setExplorerChampionsError("");
+      try {
+        const res = await fetch("/api/champions");
+        const data = (await res.json()) as {
+          champions?: ExplorerChampion[];
+          sourceCategory?: string;
+          error?: string;
+        };
+        if (cancelled) {
+          return;
+        }
+        if (!res.ok) {
+          setExplorerChampionsError(data.error ?? "Failed to load champions.");
+          setExplorerChampions([]);
+        } else {
+          setExplorerChampions(Array.isArray(data.champions) ? data.champions : []);
+          setExplorerCategoryUrl(typeof data.sourceCategory === "string" ? data.sourceCategory : "");
+        }
+      } catch {
+        if (!cancelled) {
+          setExplorerChampionsError("Network error while loading champions.");
+        }
+      } finally {
+        if (!cancelled) {
+          setExplorerChampionsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedExplorerSlug) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setExplorerInteractionsLoading(true);
+      setExplorerInteractionsError("");
+      try {
+        const enc = encodeURIComponent(selectedExplorerSlug);
+        const res = await fetch(`/api/champions/${enc}/interactions`);
+        const data = await res.json();
+        if (cancelled) {
+          return;
+        }
+        if (!res.ok) {
+          setExplorerInteractions(null);
+          setExplorerInteractionsError(typeof data.error === "string" ? data.error : "Failed to load interactions.");
+        } else {
+          setExplorerInteractions(data as ExplorerInteractionsResponse);
+        }
+      } catch {
+        if (!cancelled) {
+          setExplorerInteractions(null);
+          setExplorerInteractionsError("Network error while loading interactions.");
+        }
+      } finally {
+        if (!cancelled) {
+          setExplorerInteractionsLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedExplorerSlug]);
+
+  const explorerChampionOptions = useMemo(() => {
+    const q = explorerChampionQuery.trim().toLowerCase();
+    if (!q) {
+      return explorerChampions;
+    }
+    return explorerChampions.filter(
+      (c) => c.name.toLowerCase().includes(q) || c.slug.toLowerCase().includes(q.replace(/\s+/g, "_")),
+    );
+  }, [explorerChampions, explorerChampionQuery]);
+
+  const explorerFilteredRows = useMemo(() => {
+    if (!explorerInteractions) {
+      return [];
+    }
+    const rows =
+      explorerTab === "by"
+        ? explorerInteractions.spokenByChampion
+        : explorerTab === "to"
+          ? explorerInteractions.spokenToChampion
+          : explorerInteractions.allInteractions;
+    const ft = explorerFilterTarget.trim().toLowerCase();
+    const fty = explorerFilterType.trim().toLowerCase();
+    const fq = explorerFilterQuote.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (ft && !r.target.toLowerCase().includes(ft) && !r.speaker.toLowerCase().includes(ft)) {
+        return false;
+      }
+      if (fty && !r.interactionType.toLowerCase().includes(fty) && !r.section.toLowerCase().includes(fty)) {
+        return false;
+      }
+      if (fq && !r.quote.toLowerCase().includes(fq)) {
+        return false;
+      }
+      return true;
+    });
+  }, [explorerInteractions, explorerTab, explorerFilterTarget, explorerFilterType, explorerFilterQuote]);
+
+  async function refreshExplorerInteractions() {
+    if (!selectedExplorerSlug) {
+      return;
+    }
+    setExplorerInteractionsLoading(true);
+    setExplorerInteractionsError("");
+    try {
+      const enc = encodeURIComponent(selectedExplorerSlug);
+      const res = await fetch(`/api/champions/${enc}/interactions?refresh=1`);
+      const data = await res.json();
+      if (!res.ok) {
+        setExplorerInteractions(null);
+        setExplorerInteractionsError(typeof data.error === "string" ? data.error : "Refresh failed.");
+      } else {
+        setExplorerInteractions(data as ExplorerInteractionsResponse);
+      }
+    } catch {
+      setExplorerInteractions(null);
+      setExplorerInteractionsError("Network error on refresh.");
+    } finally {
+      setExplorerInteractionsLoading(false);
+    }
+  }
 
   const canProcess = useMemo(() => Boolean(file) && !isProcessing, [file, isProcessing]);
 
@@ -343,45 +514,14 @@ export default function HomePage() {
     selectFile(event.dataTransfer.files?.[0] ?? null);
   }
 
-  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
-    event.preventDefault();
-    setLoreError("");
-
-    if (
-      generationMode === "custom" &&
-      !loreTopic.trim() &&
-      !interactionQuote.trim() &&
-      !speakerChampion.trim() &&
-      !targetChampion.trim()
-    ) {
-      setLoreError("Enter a champion name, topic, or quote before generating.");
-      return;
-    }
-
-    setIsLoreGenerating(true);
-
+  async function submitLoreRequest(body: Record<string, unknown>) {
     try {
       const response = await fetch("/api/generate-lol-lore", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          contentType: loreContentType,
-          topic: loreTopic,
-          quote: interactionQuote,
-          speaker: speakerChampion,
-          target: targetChampion,
-          sourceType,
-          tone: loreTone,
-          platform: lorePlatform,
-          duration: loreDuration,
-          language: loreLanguage,
-          narrativeAngle,
-          audienceLevel,
-          creatorGoal,
-          mode: generationMode,
-        }),
+        body: JSON.stringify(body),
       });
 
       const rawText = await response.text();
@@ -436,6 +576,76 @@ export default function HomePage() {
       setLoreResult(fallback);
       setEditableScript(fallback.script.fullScript);
       setLoreError("");
+    }
+  }
+
+  async function handleLoreSubmit(event: FormEvent<HTMLFormElement> | React.MouseEvent<HTMLButtonElement>, generationMode: "daily" | "custom") {
+    event.preventDefault();
+    setLoreError("");
+
+    if (
+      generationMode === "custom" &&
+      !loreTopic.trim() &&
+      !interactionQuote.trim() &&
+      !speakerChampion.trim() &&
+      !targetChampion.trim()
+    ) {
+      setLoreError("Enter a champion name, topic, or quote before generating.");
+      return;
+    }
+
+    setIsLoreGenerating(true);
+    try {
+      await submitLoreRequest({
+        contentType: loreContentType,
+        topic: loreTopic,
+        quote: interactionQuote,
+        speaker: speakerChampion,
+        target: targetChampion,
+        sourceType,
+        tone: loreTone,
+        platform: lorePlatform,
+        duration: loreDuration,
+        language: loreLanguage,
+        narrativeAngle,
+        audienceLevel,
+        creatorGoal,
+        mode: generationMode,
+      });
+    } finally {
+      setIsLoreGenerating(false);
+    }
+  }
+
+  async function handleExplainExplorerLine(row: ExplorerWrittenInteraction) {
+    setLoreError("");
+    setIsLoreGenerating(true);
+    try {
+      await submitLoreRequest({
+        mode: "custom",
+        contentType: loreContentType,
+        topic: `${row.speaker} to ${row.target}`,
+        quote: row.quote,
+        speaker: row.speaker,
+        target: row.target,
+        sourceType,
+        tone: loreTone,
+        platform: lorePlatform,
+        duration: loreDuration,
+        language: loreLanguage,
+        narrativeAngle,
+        audienceLevel,
+        creatorGoal,
+        exploreSelection: {
+          speaker: row.speaker,
+          target: row.target,
+          quote: row.quote,
+          interactionType: row.interactionType,
+          section: row.section,
+          sourceUrl: row.sourceUrl,
+          isSkinContext: row.isSkinContext,
+        },
+      });
     } finally {
       setIsLoreGenerating(false);
     }
@@ -797,6 +1007,249 @@ export default function HomePage() {
                   </button>
                 </div>
               </form>
+            </div>
+
+            <div className="mt-8 rounded-[1.5rem] border border-cyan-300/15 bg-slate-950/50 p-5 sm:p-6">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-[0.28em] text-cyan-200/70">Live explorer</p>
+                  <h2 className="mt-1 text-xl font-bold text-white">Fandom written interactions</h2>
+                  <p className="mt-2 max-w-3xl text-sm text-slate-400">
+                    Champions are listed from the{" "}
+                    {explorerCategoryUrl ? (
+                      <a
+                        href={explorerCategoryUrl}
+                        className="text-cyan-200 underline underline-offset-2"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        LoL champion audio category
+                      </a>
+                    ) : (
+                      "LoL champion audio category"
+                    )}
+                    . The server parses written wiki text only — no .ogg / .mp3 / .wav download or transcription.
+                  </p>
+                </div>
+                {explorerChampionsLoading ? (
+                  <span className="text-sm text-slate-400">Loading champions…</span>
+                ) : (
+                  <span className="text-sm text-slate-400">{explorerChampions.length} champions</span>
+                )}
+              </div>
+
+              {explorerChampionsError ? (
+                <div className="mb-4 rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                  {explorerChampionsError}
+                </div>
+              ) : null}
+
+              <div className="grid gap-4 lg:grid-cols-2">
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Search champion</span>
+                  <input
+                    value={explorerChampionQuery}
+                    onChange={(event) => setExplorerChampionQuery(event.target.value)}
+                    placeholder="Filter list (e.g. Swain, Jinx)…"
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-200/50"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-2 block text-sm font-bold text-slate-200">Select champion</span>
+                  <select
+                    value={selectedExplorerSlug}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      setSelectedExplorerSlug(next);
+                      if (!next) {
+                        setExplorerInteractions(null);
+                      }
+                      setExplorerTab("by");
+                      setExplorerFilterTarget("");
+                      setExplorerFilterType("");
+                      setExplorerFilterQuote("");
+                    }}
+                    className="w-full rounded-2xl border border-white/10 bg-slate-950/70 px-4 py-3 text-white outline-none transition focus:border-cyan-200/50"
+                  >
+                    <option value="">— Choose a champion —</option>
+                    {explorerChampionOptions.map((champion) => (
+                      <option key={champion.slug} value={champion.slug}>
+                        {champion.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              {selectedExplorerSlug ? (
+                <div className="mt-6 space-y-4 border-t border-white/10 pt-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-slate-400">Selected champion</p>
+                      <p className="text-lg font-bold text-white">
+                        {explorerInteractions?.selectedChampion ?? selectedExplorerSlug.replace(/_/g, " ")}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void refreshExplorerInteractions()}
+                        disabled={explorerInteractionsLoading}
+                        className="rounded-2xl border border-white/15 bg-white/[0.06] px-4 py-2 text-sm font-bold text-white transition hover:bg-white/[0.1] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Refresh interactions
+                      </button>
+                      {explorerInteractions?.audioPageUrl ? (
+                        <a
+                          href={explorerInteractions.audioPageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-2xl border border-cyan-300/30 bg-cyan-400/10 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-400/15"
+                        >
+                          Open Fandom page
+                        </a>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  {explorerInteractionsLoading ? (
+                    <p className="text-sm text-slate-400">Loading written interactions from Fandom…</p>
+                  ) : null}
+                  {explorerInteractionsError ? (
+                    <div className="rounded-2xl border border-rose-300/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+                      {explorerInteractionsError}
+                    </div>
+                  ) : null}
+
+                  {explorerInteractions && !explorerInteractionsLoading ? (
+                    <>
+                      <p className="text-sm text-slate-300">
+                        <span className="font-semibold text-white">{explorerInteractions.selectedChampion}</span> has{" "}
+                        <span className="text-cyan-200">{explorerInteractions.count.total}</span> written interactions in this view (spoken by:{" "}
+                        {explorerInteractions.count.spokenByChampion}, spoken to: {explorerInteractions.count.spokenToChampion}).
+                      </p>
+                      {explorerInteractions.extractionNote ? (
+                        <p className="text-xs text-slate-500">{explorerInteractions.extractionNote}</p>
+                      ) : null}
+
+                      <div className="flex flex-wrap gap-2">
+                        {(() => {
+                          const nm = explorerInteractions.selectedChampion;
+                          return (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("by")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "by"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                Spoken by {nm}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("to")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "to"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                Spoken to {nm}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setExplorerTab("all")}
+                                className={`rounded-full px-4 py-2 text-sm font-bold transition ${
+                                  explorerTab === "all"
+                                    ? "bg-cyan-400/20 text-cyan-50 ring-2 ring-cyan-300/40"
+                                    : "bg-white/[0.05] text-slate-300 hover:bg-white/[0.08]"
+                                }`}
+                              >
+                                All interactions
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      <div className="grid gap-3 sm:grid-cols-3">
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Filter champion (speaker or target)</span>
+                          <input
+                            value={explorerFilterTarget}
+                            onChange={(event) => setExplorerFilterTarget(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="e.g. Jinx"
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Interaction type</span>
+                          <input
+                            value={explorerFilterType}
+                            onChange={(event) => setExplorerFilterType(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="Taunt, Kill, First…"
+                          />
+                        </label>
+                        <label className="block text-sm">
+                          <span className="mb-1 block font-bold text-slate-300">Search in quote</span>
+                          <input
+                            value={explorerFilterQuote}
+                            onChange={(event) => setExplorerFilterQuote(event.target.value)}
+                            className="w-full rounded-xl border border-white/10 bg-slate-950/70 px-3 py-2 text-white outline-none focus:border-cyan-200/40"
+                            placeholder="Keyword"
+                          />
+                        </label>
+                      </div>
+
+                      <p className="text-sm text-slate-400">
+                        Showing <span className="text-white">{explorerFilteredRows.length}</span> interaction cards
+                      </p>
+
+                      <div className="max-h-[32rem] space-y-3 overflow-y-auto pr-1">
+                        {explorerFilteredRows.map((row, index) => (
+                          <div
+                            key={`${row.speaker}|${row.target}|${row.quote}|${index}`}
+                            className="rounded-2xl border border-white/10 bg-white/[0.04] p-4"
+                          >
+                            <div className="flex flex-wrap items-start justify-between gap-2">
+                              <div>
+                                <p className="text-xs uppercase tracking-wider text-slate-500">{row.interactionType}</p>
+                                <p className="font-bold text-white">
+                                  {row.speaker} → {row.target}
+                                </p>
+                                <p className="text-xs text-slate-500">Section: {row.section}</p>
+                              </div>
+                              <a
+                                href={row.sourceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-xs font-semibold text-cyan-200 underline underline-offset-2"
+                              >
+                                Source
+                              </a>
+                            </div>
+                            <blockquote className="mt-3 border-l-2 border-cyan-400/40 pl-3 text-sm leading-relaxed text-slate-100">
+                              &ldquo;{row.quote}&rdquo;
+                            </blockquote>
+                            <button
+                              type="button"
+                              disabled={isLoreGenerating}
+                              onClick={() => void handleExplainExplorerLine(row)}
+                              className="mt-4 w-full rounded-2xl bg-gradient-to-r from-violet-400/80 to-cyan-400/80 py-3 text-sm font-black text-slate-950 transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Explain this interaction
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             {loreResult ? (

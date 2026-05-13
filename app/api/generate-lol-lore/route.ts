@@ -11,6 +11,7 @@ import {
   uiLanguageToMetadataCode,
 } from "@/app/lib/lol-interaction-explainer";
 import { findWrittenChampionInteractions, LOL_WIKI_AUDIO_CATEGORY_URL, type WikiVoiceInteraction } from "@/app/lib/lol-wiki-audio";
+import { WRITTEN_INTERACTION_SOURCE_TYPE } from "@/app/lib/fandom-champion-interaction-service";
 
 export const runtime = "nodejs";
 
@@ -66,6 +67,16 @@ type LoreRequest = {
   audienceLevel?: string;
   creatorGoal?: string;
   mode?: string;
+  /** When set, skip wiki discovery and explain this exact written line (explorer flow). */
+  exploreSelection?: {
+    speaker: string;
+    target: string;
+    quote: string;
+    interactionType?: string;
+    section?: string;
+    sourceUrl: string;
+    isSkinContext?: boolean;
+  };
 };
 
 function pickRandom<T>(items: readonly T[]) {
@@ -289,7 +300,7 @@ export async function POST(request: NextRequest) {
   const durationTarget = durationMetadataTarget(duration);
   const normalizeOpts = { language: langCode, durationTarget };
 
-  if (mode === "custom" && !topic && !quote && !speaker && !target) {
+  if (mode === "custom" && !payload.exploreSelection && !topic && !quote && !speaker && !target) {
     const body = failureLoLInteractionResponse({
       notConfirmed: ["Enter a champion name, topic, or quote before generating."],
       language: langCode,
@@ -309,38 +320,60 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(body);
   }
 
-  const { primaryDisplay, secondaryDisplay } = resolveWikiFocus(speaker, target, topic);
-  if (!primaryDisplay.trim()) {
-    const body = failureLoLInteractionResponse({
-      notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE, "No champion name could be resolved from the request."],
-      language: langCode,
-      durationTarget,
-    });
-    return NextResponse.json(body);
+  const explore = payload.exploreSelection;
+
+  let verified: WikiVoiceInteraction;
+  let wikiMeta: { candidatesConsidered?: number } = {};
+
+  if (explore?.speaker && explore.target && explore.quote && explore.sourceUrl) {
+    verified = {
+      speaker: explore.speaker.trim(),
+      target: explore.target.trim(),
+      quote: explore.quote.trim(),
+      interactionType: explore.interactionType?.trim() || "Written interaction",
+      wikiSection: explore.section?.trim() || "",
+      wikiPageTitle: "",
+      sourceUrl: explore.sourceUrl.trim(),
+      headerLine: "",
+      isSkinContext: !!explore.isSkinContext,
+    };
+    wikiMeta = { candidatesConsidered: 1 };
+  } else {
+    const { primaryDisplay, secondaryDisplay } = resolveWikiFocus(speaker, target, topic);
+    if (!primaryDisplay.trim()) {
+      const body = failureLoLInteractionResponse({
+        notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE, "No champion name could be resolved from the request."],
+        language: langCode,
+        durationTarget,
+      });
+      return NextResponse.json(body);
+    }
+
+    let wikiResult: Awaited<ReturnType<typeof findWrittenChampionInteractions>> = null;
+    try {
+      wikiResult = await findWrittenChampionInteractions({
+        primaryDisplay,
+        secondaryDisplay,
+      });
+    } catch (error) {
+      devLoreLog("wiki find error", error instanceof Error ? error.message : error);
+    }
+
+    if (!wikiResult) {
+      const body = failureLoLInteractionResponse({
+        notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE],
+        language: langCode,
+        durationTarget,
+      });
+      devLoreLog("final JSON sent to client (no wiki interaction)", body);
+      return NextResponse.json(body);
+    }
+
+    verified = wikiResult.selected;
+    wikiMeta = { candidatesConsidered: wikiResult.candidatesConsidered };
   }
 
-  let wikiResult: Awaited<ReturnType<typeof findWrittenChampionInteractions>> = null;
-  try {
-    wikiResult = await findWrittenChampionInteractions({
-      primaryDisplay,
-      secondaryDisplay,
-    });
-  } catch (error) {
-    devLoreLog("wiki find error", error instanceof Error ? error.message : error);
-  }
-
-  if (!wikiResult) {
-    const body = failureLoLInteractionResponse({
-      notConfirmed: [NO_VERIFIED_VOICE_LINE_MESSAGE],
-      language: langCode,
-      durationTarget,
-    });
-    devLoreLog("final JSON sent to client (no wiki interaction)", body);
-    return NextResponse.json(body);
-  }
-
-  const verified = wikiResult.selected;
-  devLoreLog("wiki-selected interaction", { ...verified, candidatesConsidered: wikiResult.candidatesConsidered });
+  devLoreLog("wiki-selected interaction", { ...verified, ...wikiMeta });
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -407,7 +440,7 @@ export async function POST(request: NextRequest) {
       target: verified.target,
       quote: verified.quote,
       interactionType: verified.interactionType,
-      sourceType: "Written champion interaction from Fandom LoL champion audio page",
+      sourceType: WRITTEN_INTERACTION_SOURCE_TYPE,
       sourceReference: verified.sourceUrl,
       canonStatus: forcedCanon,
     },

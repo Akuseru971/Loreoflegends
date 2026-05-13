@@ -70,12 +70,12 @@ function normalizeNameKey(name: string): string {
 }
 
 /** Canonical reader URL for a Fandom content page (written wiki HTML; we still fetch wikitext via API). */
-function wikiFandomArticleUrl(pageTitle: string): string {
+export function wikiFandomArticleUrl(pageTitle: string): string {
   const slug = pageTitle.replace(/ /g, "_");
   return `https://leagueoflegends.fandom.com/wiki/${slug}`;
 }
 
-function audioPageTitle(championKey: string): string {
+export function championKeyToLoLAudioPageTitle(championKey: string): string {
   return `${championKey}/LoL/Audio`;
 }
 
@@ -137,12 +137,12 @@ export async function extractChampionAudioPageLinksFromCategory(): Promise<strin
   return titles;
 }
 
-async function fetchWikitextForTitle(title: string): Promise<string | null> {
+export async function getChampionLoLAudioWikitext(pageTitle: string): Promise<string | null> {
   try {
     const data = (await wikiGet({
       action: "query",
       format: "json",
-      titles: title,
+      titles: pageTitle,
       prop: "revisions",
       rvprop: "content",
       rvslots: "main",
@@ -159,7 +159,7 @@ async function fetchWikitextForTitle(title: string): Promise<string | null> {
   }
 }
 
-async function fetchWikitextBatch(titles: string[]): Promise<Map<string, string | null>> {
+export async function fetchWikitextBatch(titles: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>();
   const chunkSize = 8;
   for (let i = 0; i < titles.length; i += chunkSize) {
@@ -489,7 +489,7 @@ function rowMatchesPair(row: WikiVoiceInteraction, a: string, b: string): boolea
 }
 
 /** True if raw wikitext references this champion in a {{ci|…}} template (common reverse-line signal). */
-function wikitextReferencesChampionCi(wikitext: string, primaryKey: string, primaryName: string): boolean {
+export function wikitextReferencesChampionCi(wikitext: string, primaryKey: string, primaryName: string): boolean {
   const variants = [
     `{{ci|${primaryKey}}`,
     `{{ci|${primaryName}}`,
@@ -536,10 +536,10 @@ export async function findWrittenChampionInteractions(opts: FindVoiceLineOptions
     allTitles = [];
   }
 
-  const primaryTitle = audioPageTitle(primaryKey);
+  const primaryTitle = championKeyToLoLAudioPageTitle(primaryKey);
   const titleSet = new Set(allTitles.map((t) => t.toLowerCase()));
 
-  const wikitextPrimary = await fetchWikitextForTitle(primaryTitle);
+  const wikitextPrimary = await getChampionLoLAudioWikitext(primaryTitle);
   if (!wikitextPrimary) {
     return null;
   }
@@ -548,11 +548,11 @@ export async function findWrittenChampionInteractions(opts: FindVoiceLineOptions
 
   const relatedTitles = new Set<string>();
   if (secondaryKey) {
-    relatedTitles.add(audioPageTitle(secondaryKey));
+    relatedTitles.add(championKeyToLoLAudioPageTitle(secondaryKey));
   }
   for (const r of rowsPrimary) {
     const tk = toWikiChampionKey(r.target);
-    const tTitle = audioPageTitle(tk);
+    const tTitle = championKeyToLoLAudioPageTitle(tk);
     if (titleSet.has(tTitle.toLowerCase())) {
       relatedTitles.add(tTitle);
     }
